@@ -18,6 +18,7 @@ from .const import (
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_TOWN_TUNE_PLAYER,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_AUDIO_SOURCE,
@@ -166,6 +167,12 @@ def _build_schema(
                 description={"suggested_value": d.get(CONF_WEATHER_ENTITY)},
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="weather")
+            ),
+            vol.Optional(
+                CONF_TOWN_TUNE_PLAYER,
+                description={"suggested_value": d.get(CONF_TOWN_TUNE_PLAYER)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="media_player")
             ),
         }
     )

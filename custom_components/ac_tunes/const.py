@@ -60,6 +60,7 @@ CONF_LOCAL_PATH = "local_path"
 CONF_KK_SCHEDULE = "kk_schedule"
 CONF_KK_VERSION = "kk_version"
 CONF_WEATHER_ENTITY = "weather_entity"
+CONF_TOWN_TUNE_PLAYER = "town_tune_player"
 CONF_ENABLED = "enabled"
 
 # Audio source options

@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.network import get_url
 
 from .const import (
     AUDIO_LOCAL,
@@ -17,6 +18,8 @@ from .const import (
     CONF_GAME,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
+    CONF_MEDIA_PLAYER,
+    CONF_TOWN_TUNE_PLAYER,
     CONF_WEATHER_MODE,
     DEFAULT_GAME,
     DEFAULT_KK_VERSION,
@@ -198,22 +201,30 @@ def _register_services(hass: HomeAssistant) -> None:
         cfg = _get_config(hass)
 
         # Play the town tune WAV
-        town_tune_url = "/local/ac_tunes/town_tune.wav"
+        try:
+            base = get_url(hass)
+        except Exception:  # noqa: BLE001
+            base = "http://homeassistant.local:8123"
+        town_tune_url = f"{base}/local/ac_tunes/town_tune.wav"
+
+        # Use the dedicated town tune player if configured (e.g. underlying
+        # Apple TV when main player is Music Assistant)
+        tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
         await hass.services.async_call(
             "media_player",
             "play_media",
             {
-                "entity_id": entity_id,
+                "entity_id": tune_player,
                 "media_content_id": town_tune_url,
                 "media_content_type": "music",
             },
-            blocking=True,
+            blocking=False,
         )
 
-        # Wait for town tune to finish (~3.2s + buffer)
-        await asyncio.sleep(4.0)
+        # Wait for town tune to finish (~5.2s + buffer)
+        await asyncio.sleep(7.0)
 
-        # Now play the current hour's track
+        # Now play the current hour's track on the main (MA) player
         now = datetime.now()
         game = call.data.get("game") or cfg.get(CONF_GAME, DEFAULT_GAME)
         if game == GAME_RANDOM:
@@ -238,7 +249,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 "media_content_id": url,
                 "media_content_type": "music",
             },
-            blocking=True,
+            blocking=False,
         )
 
     async def handle_stop(call: ServiceCall) -> None:

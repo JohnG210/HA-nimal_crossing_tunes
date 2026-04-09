@@ -51,7 +51,7 @@ TOWN_TUNE_NOTES: dict[str, float] = {
 
 TOWN_TUNE_LENGTH = 16
 SAMPLE_RATE = 44100  # CD quality for better high-frequency reproduction
-NOTE_DURATION = 0.18  # seconds per note slot — slightly faster feels more authentic
+NOTE_DURATION = 0.30  # seconds per note slot — matches the in-game town tune speed
 
 # ── Synthesis parameters ──────────────────────────────────────────
 # The AC town tune has a bright, metallic, bell/celesta quality.
@@ -129,8 +129,8 @@ def _generate_samples(notes: list[str]) -> list[int]:
             else:
                 env = math.exp(-DECAY_RATE * t_sec)
 
-            # Exit early once envelope is negligible
-            if env < 0.001:
+            # Exit early once envelope is negligible (only after attack)
+            if i >= attack_samples and env < 0.001:
                 break
 
             # Additive synthesis of bell partials

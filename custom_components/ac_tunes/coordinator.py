@@ -22,6 +22,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
 )
+from homeassistant.helpers.network import get_url
 
 from .const import (
     AUDIO_LOCAL,
@@ -31,6 +32,7 @@ from .const import (
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_TOWN_TUNE_PLAYER,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_GAME,
@@ -64,7 +66,7 @@ _LOGGER = logging.getLogger(__name__)
 RELOOP_DELAY = 3.0
 
 # How long the town tune plays before we start the hourly track (seconds).
-TOWN_TUNE_DURATION = 4.0
+TOWN_TUNE_DURATION = 6.0
 
 
 class ACTunesCoordinator:
@@ -172,7 +174,7 @@ class ACTunesCoordinator:
         if town_tune_url:
             _LOGGER.info("Playing town tune before hour transition")
             try:
-                await self._call_play_media(entity_id, town_tune_url)
+                await self._play_town_tune(entity_id, town_tune_url)
                 # Wait for the town tune to finish
                 await asyncio.sleep(TOWN_TUNE_DURATION)
             except Exception:  # noqa: BLE001
@@ -180,8 +182,13 @@ class ACTunesCoordinator:
 
         self._transitioning = False
 
-        # Now play the new hour's track
-        await self._play_current_hour()
+        # Now play the new hour's track (retry once if MA is still settling)
+        try:
+            await self._play_current_hour()
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("First attempt to play hourly track failed, retrying")
+            await asyncio.sleep(2.0)
+            await self._play_current_hour()
 
     # ── Playback ───────────────────────────────────────────────────
 
@@ -284,6 +291,26 @@ class ACTunesCoordinator:
 
     # ── Helpers ────────────────────────────────────────────────────
 
+    async def _play_town_tune(self, entity_id: str, url: str) -> None:
+        """Play the town tune on the configured player.
+
+        If a separate town_tune_player is configured (e.g. the underlying
+        Apple TV when using Music Assistant), use that instead.
+        """
+        cfg = self.config
+        tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
+        _LOGGER.debug("Playing town tune on %s", tune_player)
+        await self.hass.services.async_call(
+            "media_player",
+            "play_media",
+            {
+                "entity_id": tune_player,
+                "media_content_id": url,
+                "media_content_type": "music",
+            },
+            blocking=False,
+        )
+
     async def _try_set_repeat(self, entity_id: str) -> None:
         """Try to set repeat mode to 'one' on the media player."""
         try:
@@ -343,12 +370,20 @@ class ACTunesCoordinator:
         return get_hourly_url(game, weather, hour)
 
     def _get_town_tune_url(self) -> str | None:
-        """Get the URL for the town tune WAV file."""
-        # The town tune WAV is served from HA's /local/ static files
+        """Get the full URL for the town tune WAV file.
+
+        Uses the full http:// URL so it works with all media players
+        including those behind Music Assistant.
+        """
         wav_path = self.hass.config.path("www", "ac_tunes", "town_tune.wav")
-        if os.path.isfile(wav_path):
-            return "/local/ac_tunes/town_tune.wav"
-        return None
+        if not os.path.isfile(wav_path):
+            return None
+        # Build full URL from HA's internal/external URL
+        try:
+            base = get_url(self.hass)
+        except Exception:  # noqa: BLE001
+            base = "http://homeassistant.local:8123"
+        return f"{base}/local/ac_tunes/town_tune.wav"
 
     async def _call_play_media(self, entity_id: str, url: str) -> None:
         """Call the media_player.play_media service."""
