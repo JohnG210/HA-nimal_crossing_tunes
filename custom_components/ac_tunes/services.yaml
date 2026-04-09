@@ -1,0 +1,81 @@
+play_hourly:
+  name: Play Hourly Music
+  description: Play the current hour's Animal Crossing music on a media player.
+  fields:
+    entity_id:
+      name: Media Player
+      description: The media player entity to play on.
+      required: true
+      selector:
+        entity:
+          domain: media_player
+    game:
+      name: Game
+      description: Which game's soundtrack to play. Uses config default if omitted.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Animal Crossing
+              value: animal-crossing
+            - label: Wild World & City Folk
+              value: wild-world
+            - label: New Leaf
+              value: new-leaf
+            - label: New Horizons
+              value: new-horizons
+    weather:
+      name: Weather
+      description: Weather variant. Uses config default if omitted.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Sunny
+              value: sunny
+            - label: Rainy
+              value: raining
+            - label: Snowy
+              value: snowing
+
+play_kk:
+  name: Play K.K. Slider Song
+  description: Play a K.K. Slider song on a media player.
+  fields:
+    entity_id:
+      name: Media Player
+      description: The media player entity to play on.
+      required: true
+      selector:
+        entity:
+          domain: media_player
+    song_name:
+      name: Song Name
+      description: The name of the K.K. Slider song.
+      required: true
+      selector:
+        text:
+    version:
+      name: Version
+      description: Live or aircheck version.
+      required: false
+      default: live
+      selector:
+        select:
+          options:
+            - label: Live
+              value: live
+            - label: Aircheck
+              value: aircheck
+
+stop:
+  name: Stop Playback
+  description: Stop playback on a media player.
+  fields:
+    entity_id:
+      name: Media Player
+      description: The media player entity to stop.
+      required: true
+      selector:
+        entity:
+          domain: media_player

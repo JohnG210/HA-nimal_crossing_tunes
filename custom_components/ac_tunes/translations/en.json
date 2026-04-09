@@ -1,0 +1,88 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Animal Crossing Tunes",
+        "description": "Set up Animal Crossing hourly music.",
+        "data": {
+          "game": "Game",
+          "weather_mode": "Weather Mode",
+          "media_player_entity": "Media Player",
+          "audio_source": "Audio Source",
+          "local_path": "Local Media Path",
+          "kk_schedule": "K.K. Slider Schedule",
+          "kk_version": "K.K. Version Preference",
+          "weather_entity": "Weather Entity (for live weather)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Animal Crossing Tunes is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Animal Crossing Tunes Options",
+        "data": {
+          "game": "Game",
+          "weather_mode": "Weather Mode",
+          "media_player_entity": "Media Player",
+          "audio_source": "Audio Source",
+          "local_path": "Local Media Path",
+          "kk_schedule": "K.K. Slider Schedule",
+          "kk_version": "K.K. Version Preference",
+          "weather_entity": "Weather Entity (for live weather)"
+        }
+      }
+    }
+  },
+  "services": {
+    "play_hourly": {
+      "name": "Play Hourly Music",
+      "description": "Play the current hour's Animal Crossing music on a media player.",
+      "fields": {
+        "entity_id": {
+          "name": "Media Player",
+          "description": "The media player entity to play on."
+        },
+        "game": {
+          "name": "Game",
+          "description": "Which game's soundtrack to play."
+        },
+        "weather": {
+          "name": "Weather",
+          "description": "Weather variant to use."
+        }
+      }
+    },
+    "play_kk": {
+      "name": "Play K.K. Slider Song",
+      "description": "Play a K.K. Slider song on a media player.",
+      "fields": {
+        "entity_id": {
+          "name": "Media Player",
+          "description": "The media player entity to play on."
+        },
+        "song_name": {
+          "name": "Song Name",
+          "description": "The name of the K.K. Slider song."
+        },
+        "version": {
+          "name": "Version",
+          "description": "Live or aircheck version."
+        }
+      }
+    },
+    "stop": {
+      "name": "Stop Playback",
+      "description": "Stop playback on a media player.",
+      "fields": {
+        "entity_id": {
+          "name": "Media Player",
+          "description": "The media player entity to stop."
+        }
+      }
+    }
+  }
+}
