@@ -20,6 +20,7 @@ from .const import (
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
     CONF_TOWN_TUNE_PLAYER,
+    CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_GAME,
     DEFAULT_KK_VERSION,
@@ -28,13 +29,18 @@ from .const import (
     GAME_RANDOM,
     GAMES,
     KK_LIVE,
+    WEATHER_LIVE,
+    WEATHER_RANDOM,
+    WEATHER_SUNNY,
 )
 from .coordinator import ACTunesCoordinator
 from .music_data import (
+    get_available_weathers,
     get_hourly_url,
     get_hourly_url_local,
     get_kk_url,
     get_kk_url_local,
+    map_weather_state,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -143,8 +149,8 @@ def _register_services(hass: HomeAssistant) -> None:
         if game == GAME_RANDOM:
             game = random.choice(list(GAMES.keys()))  # noqa: S311
 
-        weather = call.data.get("weather") or cfg.get(
-            CONF_WEATHER_MODE, DEFAULT_WEATHER_MODE
+        weather = _resolve_weather(
+            hass, cfg, game, call.data.get("weather")
         )
 
         hour = now.hour
@@ -210,28 +216,34 @@ def _register_services(hass: HomeAssistant) -> None:
         # Use the dedicated town tune player if configured (e.g. underlying
         # Apple TV when main player is Music Assistant)
         tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
-        await hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": tune_player,
-                "media_content_id": town_tune_url,
-                "media_content_type": "music",
-            },
-            blocking=False,
-        )
+        # Use a separate player for the tune when configured (MA workaround)
+        uses_separate_player = tune_player != entity_id
+
+        try:
+            await hass.services.async_call(
+                "media_player",
+                "play_media",
+                {
+                    "entity_id": tune_player,
+                    "media_content_id": town_tune_url,
+                    "media_content_type": "music",
+                },
+                blocking=not uses_separate_player,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Failed to play town tune")
 
         # Wait for town tune to finish (~5.2s + buffer)
         await asyncio.sleep(7.0)
 
-        # Now play the current hour's track on the main (MA) player
+        # Now play the current hour's track on the main player
         now = datetime.now()
         game = call.data.get("game") or cfg.get(CONF_GAME, DEFAULT_GAME)
         if game == GAME_RANDOM:
             game = random.choice(list(GAMES.keys()))  # noqa: S311
 
-        weather = call.data.get("weather") or cfg.get(
-            CONF_WEATHER_MODE, DEFAULT_WEATHER_MODE
+        weather = _resolve_weather(
+            hass, cfg, game, call.data.get("weather")
         )
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
@@ -241,16 +253,20 @@ def _register_services(hass: HomeAssistant) -> None:
         else:
             url = get_hourly_url(game, weather, now.hour)
 
-        await hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": entity_id,
-                "media_content_id": url,
-                "media_content_type": "music",
-            },
-            blocking=False,
-        )
+        _LOGGER.info("Playing hourly track: %s", url)
+        try:
+            await hass.services.async_call(
+                "media_player",
+                "play_media",
+                {
+                    "entity_id": entity_id,
+                    "media_content_id": url,
+                    "media_content_type": "music",
+                },
+                blocking=True,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Failed to play hourly track after town tune")
 
     async def handle_stop(call: ServiceCall) -> None:
         """Handle the stop service call."""
@@ -277,6 +293,28 @@ def _register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_STOP, handle_stop, schema=STOP_SCHEMA
     )
+
+
+def _resolve_weather(hass: HomeAssistant, cfg: dict, game: str, override: str | None = None) -> str:
+    """Resolve weather mode to an actual weather variant for URL building."""
+    if override and override not in (WEATHER_LIVE, WEATHER_RANDOM):
+        return override
+    mode = override or cfg.get(CONF_WEATHER_MODE, DEFAULT_WEATHER_MODE)
+    available = get_available_weathers(game)
+    if mode == WEATHER_LIVE:
+        weather_entity = cfg.get(CONF_WEATHER_ENTITY)
+        if weather_entity:
+            state = hass.states.get(weather_entity)
+            if state:
+                mapped = map_weather_state(state.state)
+                if mapped in available:
+                    return mapped
+        return WEATHER_SUNNY
+    if mode == WEATHER_RANDOM:
+        return random.choice(available)  # noqa: S311
+    if mode in available:
+        return mode
+    return available[0]
 
 
 def _get_config(hass: HomeAssistant) -> dict:
