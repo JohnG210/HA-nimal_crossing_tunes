@@ -13,7 +13,9 @@
           "kk_schedule": "K.K. Slider Schedule",
           "kk_version": "K.K. Version Preference",
           "weather_entity": "Weather Entity (for live weather)",
-          "town_tune_player": "Town Tune Player (if using Music Assistant)"
+          "town_tune_player": "Town Tune Player (if using Music Assistant)",
+          "music_volume": "Music Volume",
+          "town_tune_volume": "Town Tune Volume"
         }
       }
     },
@@ -34,7 +36,9 @@
           "kk_schedule": "K.K. Slider Schedule",
           "kk_version": "K.K. Version Preference",
           "weather_entity": "Weather Entity (for live weather)",
-          "town_tune_player": "Town Tune Player (if using Music Assistant)"
+          "town_tune_player": "Town Tune Player (if using Music Assistant)",
+          "music_volume": "Music Volume",
+          "town_tune_volume": "Town Tune Volume"
         }
       }
     }

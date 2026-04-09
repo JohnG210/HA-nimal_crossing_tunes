@@ -61,6 +61,8 @@ CONF_KK_SCHEDULE = "kk_schedule"
 CONF_KK_VERSION = "kk_version"
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_TOWN_TUNE_PLAYER = "town_tune_player"
+CONF_MUSIC_VOLUME = "music_volume"
+CONF_TOWN_TUNE_VOLUME = "town_tune_volume"
 CONF_ENABLED = "enabled"
 
 # Audio source options

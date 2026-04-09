@@ -18,7 +18,9 @@ from .const import (
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_PLAYER,
+    CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_AUDIO_SOURCE,
@@ -173,6 +175,30 @@ def _build_schema(
                 description={"suggested_value": d.get(CONF_TOWN_TUNE_PLAYER)},
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="media_player")
+            ),
+            vol.Optional(
+                CONF_MUSIC_VOLUME,
+                description={"suggested_value": d.get(CONF_MUSIC_VOLUME)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=100,
+                    step=1,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Optional(
+                CONF_TOWN_TUNE_VOLUME,
+                description={"suggested_value": d.get(CONF_TOWN_TUNE_VOLUME)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=100,
+                    step=1,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
             ),
         }
     )

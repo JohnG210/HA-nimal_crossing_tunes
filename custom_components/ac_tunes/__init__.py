@@ -19,7 +19,9 @@ from .const import (
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_PLAYER,
+    CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_GAME,
@@ -162,6 +164,8 @@ def _register_services(hass: HomeAssistant) -> None:
         else:
             url = get_hourly_url(game, weather, hour)
 
+        await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
+
         await hass.services.async_call(
             "media_player",
             "play_media",
@@ -187,6 +191,8 @@ def _register_services(hass: HomeAssistant) -> None:
             )
         else:
             url = get_kk_url(song_name, version)
+
+        await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
 
         await hass.services.async_call(
             "media_player",
@@ -220,6 +226,7 @@ def _register_services(hass: HomeAssistant) -> None:
         uses_separate_player = tune_player != entity_id
 
         try:
+            await _set_volume(hass, tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME))
             await hass.services.async_call(
                 "media_player",
                 "play_media",
@@ -255,6 +262,7 @@ def _register_services(hass: HomeAssistant) -> None:
 
         _LOGGER.info("Playing hourly track: %s", url)
         try:
+            await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
             await hass.services.async_call(
                 "media_player",
                 "play_media",
@@ -293,6 +301,22 @@ def _register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_STOP, handle_stop, schema=STOP_SCHEMA
     )
+
+
+async def _set_volume(hass: HomeAssistant, entity_id: str, volume_pct: int | None) -> None:
+    """Set volume on a media player if a value is configured."""
+    if volume_pct is None:
+        return
+    volume = max(0.0, min(1.0, volume_pct / 100.0))
+    try:
+        await hass.services.async_call(
+            "media_player",
+            "volume_set",
+            {"entity_id": entity_id, "volume_level": volume},
+            blocking=True,
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not set volume on %s", entity_id)
 
 
 def _resolve_weather(hass: HomeAssistant, cfg: dict, game: str, override: str | None = None) -> str:

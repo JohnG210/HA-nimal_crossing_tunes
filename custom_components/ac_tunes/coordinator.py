@@ -33,6 +33,8 @@ from .const import (
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
     CONF_TOWN_TUNE_PLAYER,
+    CONF_MUSIC_VOLUME,
+    CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_GAME,
@@ -63,7 +65,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # How long to wait after player goes idle before re-triggering (seconds).
 # This avoids fighting with brief state transitions during playback start.
-RELOOP_DELAY = 3.0
+RELOOP_DELAY = 2.0
 
 # How long the town tune plays before we start the hourly track (seconds).
 TOWN_TUNE_DURATION = 6.0
@@ -174,6 +176,8 @@ class ACTunesCoordinator:
         if town_tune_url:
             _LOGGER.info("Playing town tune before hour transition")
             try:
+                tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
+                await self._set_volume(tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME))
                 await self._play_town_tune(entity_id, town_tune_url)
                 # Wait for the town tune to finish
                 await asyncio.sleep(TOWN_TUNE_DURATION)
@@ -221,6 +225,8 @@ class ACTunesCoordinator:
         self._intentional_stop = False
         self._current_url = url
 
+        await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
+
         _LOGGER.info(
             "Playing %s/%s hour %d on %s", game, weather, now.hour, entity_id
         )
@@ -242,6 +248,8 @@ class ACTunesCoordinator:
         self._intentional_stop = False
         self._current_url = url
 
+        await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
+
         _LOGGER.info("Playing K.K. Slider: %s (%s) on %s", song, version, entity_id)
         await self._call_play_media(entity_id, url)
 
@@ -259,10 +267,17 @@ class ACTunesCoordinator:
         if not new_state or not old_state:
             return
 
-        # If the player went from playing to idle/off, the track ended
+        _LOGGER.debug(
+            "Player state change: %s -> %s (url=%s)",
+            old_state.state,
+            new_state.state,
+            self._current_url,
+        )
+
+        # If the player went from playing to idle/off/paused, the track ended
         if (
             old_state.state == "playing"
-            and new_state.state in (STATE_IDLE, STATE_OFF)
+            and new_state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED)
             and self._current_url
         ):
             # Schedule a re-loop with a small delay to avoid rapid cycling
@@ -285,11 +300,26 @@ class ACTunesCoordinator:
 
         # Check the player is still idle (not playing something else)
         state = self.hass.states.get(entity_id)
-        if state and state.state in (STATE_IDLE, STATE_OFF):
+        if state and state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED):
             _LOGGER.debug("Re-looping track: %s", self._current_url)
             await self._call_play_media(entity_id, self._current_url)
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    async def _set_volume(self, entity_id: str, volume_pct: int | None) -> None:
+        """Set volume on the media player if a value is configured."""
+        if volume_pct is None:
+            return
+        volume = max(0.0, min(1.0, volume_pct / 100.0))
+        try:
+            await self.hass.services.async_call(
+                "media_player",
+                "volume_set",
+                {"entity_id": entity_id, "volume_level": volume},
+                blocking=True,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Could not set volume on %s", entity_id)
 
     async def _play_town_tune(self, entity_id: str, url: str) -> None:
         """Play the town tune on the configured player.
