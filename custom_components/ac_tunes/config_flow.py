@@ -18,6 +18,7 @@ from .const import (
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_DURATION_TRACKING,
     CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_PLAYER,
     CONF_TOWN_TUNE_VOLUME,
@@ -200,6 +201,10 @@ def _build_schema(
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
+            vol.Optional(
+                CONF_DURATION_TRACKING,
+                default=d.get(CONF_DURATION_TRACKING, False),
+            ): selector.BooleanSelector(),
         }
     )
 

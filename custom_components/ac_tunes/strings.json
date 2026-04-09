@@ -15,7 +15,8 @@
           "weather_entity": "Weather Entity (for live weather)",
           "town_tune_player": "Town Tune Player (if using Music Assistant)",
           "music_volume": "Music Volume",
-          "town_tune_volume": "Town Tune Volume"
+          "town_tune_volume": "Town Tune Volume",
+          "duration_tracking": "Duration Tracking (enable for speakers that stay 'playing' after track ends)"
         }
       }
     },
@@ -38,7 +39,8 @@
           "weather_entity": "Weather Entity (for live weather)",
           "town_tune_player": "Town Tune Player (if using Music Assistant)",
           "music_volume": "Music Volume",
-          "town_tune_volume": "Town Tune Volume"
+          "town_tune_volume": "Town Tune Volume",
+          "duration_tracking": "Duration Tracking (enable for speakers that stay 'playing' after track ends)"
         }
       }
     }

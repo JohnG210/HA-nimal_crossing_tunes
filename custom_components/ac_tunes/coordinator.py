@@ -33,6 +33,7 @@ from .const import (
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
     CONF_TOWN_TUNE_PLAYER,
+    CONF_DURATION_TRACKING,
     CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
@@ -60,6 +61,7 @@ from .music_data import (
     get_random_kk_song,
     map_weather_state,
 )
+from .track_durations import TRACK_DURATIONS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +71,9 @@ RELOOP_DELAY = 2.0
 
 # How long the town tune plays before we start the hourly track (seconds).
 TOWN_TUNE_DURATION = 6.0
+
+# Extra buffer before re-triggering to avoid cutting off the end (seconds).
+DURATION_BUFFER = 3.0
 
 
 class ACTunesCoordinator:
@@ -90,6 +95,7 @@ class ACTunesCoordinator:
         self._unsub_hourly: CALLBACK_TYPE | None = None
         self._unsub_state: CALLBACK_TYPE | None = None
         self._reloop_task: asyncio.Task | None = None
+        self._duration_timer_task: asyncio.Task | None = None
 
     @property
     def config(self) -> dict:
@@ -129,6 +135,11 @@ class ACTunesCoordinator:
         if self._reloop_task and not self._reloop_task.done():
             self._reloop_task.cancel()
             self._reloop_task = None
+
+        # Cancel duration timer
+        if self._duration_timer_task and not self._duration_timer_task.done():
+            self._duration_timer_task.cancel()
+            self._duration_timer_task = None
 
         # Unsubscribe listeners
         if self._unsub_hourly:
@@ -170,6 +181,11 @@ class ACTunesCoordinator:
             return
 
         self._transitioning = True
+
+        # Cancel any running duration timer so it doesn't fire mid-transition
+        if self._duration_timer_task and not self._duration_timer_task.done():
+            self._duration_timer_task.cancel()
+            self._duration_timer_task = None
 
         # Play town tune
         town_tune_url = self._get_town_tune_url()
@@ -241,7 +257,10 @@ class ACTunesCoordinator:
         version = cfg.get(CONF_KK_VERSION, DEFAULT_KK_VERSION)
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            url = get_kk_url_local(song, version, cfg.get(CONF_LOCAL_PATH, ""))
+            from urllib.parse import quote
+
+            encoded = quote(f"{song}.ogg")
+            url = f"{self._get_ha_base_url()}/local/ac_tunes/kk/{version}/{encoded}"
         else:
             url = get_kk_url(song, version)
 
@@ -303,6 +322,89 @@ class ACTunesCoordinator:
         if state and state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED):
             _LOGGER.debug("Re-looping track: %s", self._current_url)
             await self._call_play_media(entity_id, self._current_url)
+
+    # ── Duration tracking (timer-based fallback) ────────────────
+
+    def _schedule_duration_timer(self, url: str) -> None:
+        """Schedule a re-trigger after the estimated track duration.
+
+        Uses HTTP HEAD to get file size, then estimates duration from
+        OGG bitrate. Falls back to state-based looping if HEAD fails.
+        """
+        if not self.config.get(CONF_DURATION_TRACKING):
+            return
+
+        # Cancel any existing timer
+        if self._duration_timer_task and not self._duration_timer_task.done():
+            self._duration_timer_task.cancel()
+
+        self._duration_timer_task = self.hass.async_create_task(
+            self._duration_timer(url)
+        )
+
+    async def _duration_timer(self, url: str) -> None:
+        """Look up duration, wait, then re-trigger."""
+        duration = self._get_track_duration(url)
+        if duration is None:
+            _LOGGER.warning("Duration tracking: could not estimate duration for %s", url)
+            return
+
+        wait_time = duration + DURATION_BUFFER
+        _LOGGER.info(
+            "Duration tracking: estimated %.0fs, will re-trigger in %.0fs",
+            duration,
+            wait_time,
+        )
+
+        await asyncio.sleep(wait_time)
+
+        if not self.enabled or self._intentional_stop or self._transitioning:
+            return
+        if self._current_url != url:
+            return
+
+        entity_id = self.config.get(CONF_MEDIA_PLAYER)
+        if not entity_id:
+            return
+
+        _LOGGER.info("Duration tracking: timer fired, re-looping %s", url)
+        await self._call_play_media(entity_id, url)
+
+        # Schedule the next timer for the same track
+        self._schedule_duration_timer(url)
+
+    def _get_track_duration(self, url: str) -> float | None:
+        """Look up track duration from the hardcoded duration table.
+
+        Extracts the lookup key from the URL/path by matching the
+        pattern: {game}/{weather}/{hour} or kk/{version}/{song}
+        """
+        # Strip .ogg extension and find the key portion
+        path = url.rsplit(".ogg", 1)[0]
+
+        # Try matching hourly: .../game/weather/hour
+        # Try matching KK: .../kk/version/song
+        for prefix in ("kk/live/", "kk/aircheck/"):
+            idx = path.find(prefix)
+            if idx != -1:
+                key = path[idx:].replace("%20", " ").replace("%27", "'")
+                dur = TRACK_DURATIONS.get(key)
+                if dur:
+                    _LOGGER.debug("Duration lookup: %s = %.1fs", key, dur)
+                    return dur
+
+        # Hourly tracks: find game/weather/hour pattern
+        for game in ("animal-crossing", "wild-world", "new-leaf", "new-horizons"):
+            idx = path.find(f"{game}/")
+            if idx != -1:
+                key = path[idx:]
+                dur = TRACK_DURATIONS.get(key)
+                if dur:
+                    _LOGGER.debug("Duration lookup: %s = %.1fs", key, dur)
+                    return dur
+
+        _LOGGER.warning("No duration found for: %s", url)
+        return None
 
     # ── Helpers ────────────────────────────────────────────────────
 
@@ -394,26 +496,25 @@ class ACTunesCoordinator:
     ) -> str:
         """Build the URL for the hourly track."""
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            return get_hourly_url_local(
-                game, weather, hour, cfg.get(CONF_LOCAL_PATH, "")
-            )
+            from .music_data import format_hour
+
+            hour_str = format_hour(hour)
+            return f"{self._get_ha_base_url()}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
         return get_hourly_url(game, weather, hour)
 
-    def _get_town_tune_url(self) -> str | None:
-        """Get the full URL for the town tune WAV file.
+    def _get_ha_base_url(self) -> str:
+        """Get the HA base URL for serving local files."""
+        try:
+            return get_url(self.hass)
+        except Exception:  # noqa: BLE001
+            return "http://homeassistant.local:8123"
 
-        Uses the full http:// URL so it works with all media players
-        including those behind Music Assistant.
-        """
+    def _get_town_tune_url(self) -> str | None:
+        """Get the full URL for the town tune WAV file."""
         wav_path = self.hass.config.path("www", "ac_tunes", "town_tune.wav")
         if not os.path.isfile(wav_path):
             return None
-        # Build full URL from HA's internal/external URL
-        try:
-            base = get_url(self.hass)
-        except Exception:  # noqa: BLE001
-            base = "http://homeassistant.local:8123"
-        return f"{base}/local/ac_tunes/town_tune.wav"
+        return f"{self._get_ha_base_url()}/local/ac_tunes/town_tune.wav"
 
     async def _call_play_media(self, entity_id: str, url: str) -> None:
         """Call the media_player.play_media service."""
@@ -427,3 +528,5 @@ class ACTunesCoordinator:
             },
             blocking=True,
         )
+        # Start duration timer for re-looping if enabled
+        self._schedule_duration_timer(url)

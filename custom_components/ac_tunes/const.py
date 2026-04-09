@@ -63,6 +63,7 @@ CONF_WEATHER_ENTITY = "weather_entity"
 CONF_TOWN_TUNE_PLAYER = "town_tune_player"
 CONF_MUSIC_VOLUME = "music_volume"
 CONF_TOWN_TUNE_VOLUME = "town_tune_volume"
+CONF_DURATION_TRACKING = "duration_tracking"
 CONF_ENABLED = "enabled"
 
 # Audio source options

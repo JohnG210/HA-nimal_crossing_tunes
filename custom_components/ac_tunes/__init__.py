@@ -158,9 +158,11 @@ def _register_services(hass: HomeAssistant) -> None:
         hour = now.hour
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            url = get_hourly_url_local(
-                game, weather, hour, cfg.get(CONF_LOCAL_PATH, "")
-            )
+            from .music_data import format_hour
+
+            hour_str = format_hour(hour)
+            base = _get_ha_base_url(hass)
+            url = f"{base}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
         else:
             url = get_hourly_url(game, weather, hour)
 
@@ -186,9 +188,11 @@ def _register_services(hass: HomeAssistant) -> None:
         cfg = _get_config(hass)
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            url = get_kk_url_local(
-                song_name, version, cfg.get(CONF_LOCAL_PATH, "")
-            )
+            from urllib.parse import quote
+
+            encoded = quote(f"{song_name}.ogg")
+            base = _get_ha_base_url(hass)
+            url = f"{base}/local/ac_tunes/kk/{version}/{encoded}"
         else:
             url = get_kk_url(song_name, version)
 
@@ -254,9 +258,11 @@ def _register_services(hass: HomeAssistant) -> None:
         )
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            url = get_hourly_url_local(
-                game, weather, now.hour, cfg.get(CONF_LOCAL_PATH, "")
-            )
+            from .music_data import format_hour
+
+            hour_str = format_hour(now.hour)
+            base = _get_ha_base_url(hass)
+            url = f"{base}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
         else:
             url = get_hourly_url(game, weather, now.hour)
 
@@ -301,6 +307,14 @@ def _register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_STOP, handle_stop, schema=STOP_SCHEMA
     )
+
+
+def _get_ha_base_url(hass: HomeAssistant) -> str:
+    """Get the HA base URL for serving local files."""
+    try:
+        return get_url(hass)
+    except Exception:  # noqa: BLE001
+        return "http://homeassistant.local:8123"
 
 
 async def _set_volume(hass: HomeAssistant, entity_id: str, volume_pct: int | None) -> None:
