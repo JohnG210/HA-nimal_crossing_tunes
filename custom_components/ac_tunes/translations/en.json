@@ -74,6 +74,24 @@
         }
       }
     },
+    "play_town_tune": {
+      "name": "Play Town Tune",
+      "description": "Play the town tune chime, then start the current hour's track.",
+      "fields": {
+        "entity_id": {
+          "name": "Media Player",
+          "description": "The media player entity to play on."
+        },
+        "game": {
+          "name": "Game",
+          "description": "Which game's soundtrack to play after the town tune."
+        },
+        "weather": {
+          "name": "Weather",
+          "description": "Weather variant to use."
+        }
+      }
+    },
     "stop": {
       "name": "Stop Playback",
       "description": "Stop playback on a media player.",

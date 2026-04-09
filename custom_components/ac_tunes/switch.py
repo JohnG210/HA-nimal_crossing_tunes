@@ -20,7 +20,7 @@ async def async_setup_entry(
 
 
 class ACTunesAutoPlaySwitch(SwitchEntity):
-    """Switch to toggle hourly auto-play."""
+    """Switch to toggle continuous hourly auto-play."""
 
     _attr_has_entity_name = True
     _attr_name = "Auto-Play"
@@ -38,11 +38,11 @@ class ACTunesAutoPlaySwitch(SwitchEntity):
         return self._coordinator.enabled
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Enable auto-play."""
-        self._coordinator.start()
+        """Enable auto-play — starts continuous playback immediately."""
+        await self._coordinator.async_start()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Disable auto-play."""
-        self._coordinator.stop()
+        """Disable auto-play — stops the media player."""
+        await self._coordinator.async_stop()
         self.async_write_ha_state()

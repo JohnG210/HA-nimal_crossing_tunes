@@ -68,6 +68,46 @@ play_kk:
             - label: Aircheck
               value: aircheck
 
+play_town_tune:
+  name: Play Town Tune
+  description: Play the town tune chime, then start the current hour's track.
+  fields:
+    entity_id:
+      name: Media Player
+      description: The media player entity to play on.
+      required: true
+      selector:
+        entity:
+          domain: media_player
+    game:
+      name: Game
+      description: Which game's soundtrack to play after the town tune. Uses config default if omitted.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Animal Crossing
+              value: animal-crossing
+            - label: Wild World & City Folk
+              value: wild-world
+            - label: New Leaf
+              value: new-leaf
+            - label: New Horizons
+              value: new-horizons
+    weather:
+      name: Weather
+      description: Weather variant. Uses config default if omitted.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Sunny
+              value: sunny
+            - label: Rainy
+              value: raining
+            - label: Snowy
+              value: snowing
+
 stop:
   name: Stop Playback
   description: Stop playback on a media player.

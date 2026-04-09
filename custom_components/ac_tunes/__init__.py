@@ -40,6 +40,7 @@ PLATFORMS: list[str] = ["switch"]
 
 SERVICE_PLAY_HOURLY = "play_hourly"
 SERVICE_PLAY_KK = "play_kk"
+SERVICE_PLAY_TOWN_TUNE = "play_town_tune"
 SERVICE_STOP = "stop"
 
 PLAY_HOURLY_SCHEMA = vol.Schema(
@@ -69,19 +70,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Animal Crossing Tunes from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
+    # Generate the town tune WAV file so it's ready for playback
+    await hass.async_add_executor_job(_generate_town_tune, hass)
+
     coordinator = ACTunesCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
     }
 
-    # Start the hourly coordinator
-    coordinator.start()
-
     # Forward to switch platform for the auto-play toggle
+    # (playback doesn't start until the user turns the switch on)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register services (only once)
-    if not hass.services.has_service(DOMAIN, SERVICE_PLAY_HOURLY):
+    # Register services (only once — check for the newest service to detect stale registrations)
+    if not hass.services.has_service(DOMAIN, SERVICE_PLAY_TOWN_TUNE):
         _register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -89,11 +91,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _generate_town_tune(hass: HomeAssistant) -> None:
+    """Generate the town tune WAV in the www directory (runs in executor)."""
+    from .town_tune import generate_town_tune_wav
+
+    wav_path = hass.config.path("www", "ac_tunes", "town_tune.wav")
+    generate_town_tune_wav(output_path=wav_path)
+    _LOGGER.info("Town tune WAV generated at %s", wav_path)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     data = hass.data[DOMAIN].pop(entry.entry_id, None)
     if data:
-        data["coordinator"].stop()
+        await data["coordinator"].async_stop()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
@@ -101,6 +112,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_PLAY_HOURLY)
         hass.services.async_remove(DOMAIN, SERVICE_PLAY_KK)
+        hass.services.async_remove(DOMAIN, SERVICE_PLAY_TOWN_TUNE)
         hass.services.async_remove(DOMAIN, SERVICE_STOP)
 
     return unload_ok
@@ -178,6 +190,57 @@ def _register_services(hass: HomeAssistant) -> None:
             blocking=True,
         )
 
+    async def handle_play_town_tune(call: ServiceCall) -> None:
+        """Play the town tune, then start the current hour's track."""
+        import asyncio
+
+        entity_id = call.data["entity_id"]
+        cfg = _get_config(hass)
+
+        # Play the town tune WAV
+        town_tune_url = "/local/ac_tunes/town_tune.wav"
+        await hass.services.async_call(
+            "media_player",
+            "play_media",
+            {
+                "entity_id": entity_id,
+                "media_content_id": town_tune_url,
+                "media_content_type": "music",
+            },
+            blocking=True,
+        )
+
+        # Wait for town tune to finish (~3.2s + buffer)
+        await asyncio.sleep(4.0)
+
+        # Now play the current hour's track
+        now = datetime.now()
+        game = call.data.get("game") or cfg.get(CONF_GAME, DEFAULT_GAME)
+        if game == GAME_RANDOM:
+            game = random.choice(list(GAMES.keys()))  # noqa: S311
+
+        weather = call.data.get("weather") or cfg.get(
+            CONF_WEATHER_MODE, DEFAULT_WEATHER_MODE
+        )
+
+        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
+            url = get_hourly_url_local(
+                game, weather, now.hour, cfg.get(CONF_LOCAL_PATH, "")
+            )
+        else:
+            url = get_hourly_url(game, weather, now.hour)
+
+        await hass.services.async_call(
+            "media_player",
+            "play_media",
+            {
+                "entity_id": entity_id,
+                "media_content_id": url,
+                "media_content_type": "music",
+            },
+            blocking=True,
+        )
+
     async def handle_stop(call: ServiceCall) -> None:
         """Handle the stop service call."""
         entity_id = call.data["entity_id"]
@@ -193,6 +256,12 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_PLAY_KK, handle_play_kk, schema=PLAY_KK_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PLAY_TOWN_TUNE,
+        handle_play_town_tune,
+        schema=PLAY_HOURLY_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_STOP, handle_stop, schema=STOP_SCHEMA
