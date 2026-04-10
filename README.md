@@ -41,13 +41,18 @@ Or click the badge above to add the repository directly.
 
 The town tune editor card is included at `www/town-tune-card.js`. To use it:
 
-1. Add the resource in **Settings → Dashboards → Resources** (or via YAML):
+1. Copy `www/town-tune-card.js` to your HA `config/www/ac_tunes/` directory
+2. Add the resource in **Settings → Dashboards → Resources** (or via YAML):
    ```yaml
    resources:
-     - url: /hacsfiles/ac_tunes/town-tune-card.js
+     - url: /local/ac_tunes/town-tune-card.js
        type: module
    ```
-2. Add a **Manual Card** to your dashboard with type `custom:town-tune-card`
+3. Add a **Manual Card** to your dashboard with this config:
+   ```yaml
+   type: custom:town-tune-card
+   entity: switch.ac_tunes_auto_play
+   ```
 
 ### Manual
 
