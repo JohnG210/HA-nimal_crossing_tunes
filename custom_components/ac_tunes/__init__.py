@@ -119,10 +119,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Animal Crossing Tunes from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Generate the town tune WAV file so it's ready for playback
+    # Generate the town tune WAV only if one doesn't exist yet
     cfg = {**entry.data, **entry.options}
     town_tune_notes = cfg.get(CONF_TOWN_TUNE)
-    await hass.async_add_executor_job(_generate_town_tune, hass, town_tune_notes)
+    wav_path = Path(hass.config.path("www", "ac_tunes", "town_tune.wav"))
+    if not wav_path.exists():
+        await hass.async_add_executor_job(_generate_town_tune, hass, town_tune_notes)
 
     # Serve the town-tune-card.js frontend panel
     await hass.http.async_register_static_paths(
