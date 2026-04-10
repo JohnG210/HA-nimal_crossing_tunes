@@ -53,6 +53,8 @@ The town tune editor card is bundled with the integration and served automatical
    entity: switch.ac_tunes_auto_play
    ```
 
+<img src="images/town-tune-editor.png" alt="Town Tune Editor Card" width="420">
+
 ### Manual
 
 1. Copy the `custom_components/ac_tunes` folder into your Home Assistant `config/custom_components/` directory
