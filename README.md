@@ -39,16 +39,15 @@ Or click the badge above to add the repository directly.
 
 ### Town Tune Editor Card
 
-The town tune editor card is included at `www/town-tune-card.js`. To use it:
+The town tune editor card is bundled with the integration and served automatically. To use it:
 
-1. Copy `www/town-tune-card.js` to your HA `config/www/ac_tunes/` directory
-2. Add the resource in **Settings → Dashboards → Resources** (or via YAML):
+1. Add the resource in **Settings → Dashboards → Resources** (or via YAML):
    ```yaml
    resources:
-     - url: /local/ac_tunes/town-tune-card.js
+     - url: /ac_tunes/town-tune-card.js
        type: module
    ```
-3. Add a **Manual Card** to your dashboard with this config:
+2. Add a **Manual Card** to your dashboard with this config:
    ```yaml
    type: custom:town-tune-card
    entity: switch.ac_tunes_auto_play
@@ -57,8 +56,7 @@ The town tune editor card is included at `www/town-tune-card.js`. To use it:
 ### Manual
 
 1. Copy the `custom_components/ac_tunes` folder into your Home Assistant `config/custom_components/` directory
-2. Copy `www/town-tune-card.js` into `config/www/`
-3. Restart Home Assistant
+2. Restart Home Assistant
 
 ## Setup
 

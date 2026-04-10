@@ -7,6 +7,9 @@ from datetime import datetime
 
 import voluptuous as vol
 
+from pathlib import Path
+
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
@@ -120,6 +123,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cfg = {**entry.data, **entry.options}
     town_tune_notes = cfg.get(CONF_TOWN_TUNE)
     await hass.async_add_executor_job(_generate_town_tune, hass, town_tune_notes)
+
+    # Serve the town-tune-card.js frontend panel
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                "/ac_tunes", str(Path(__file__).parent / "www"), cache_headers=False
+            )
+        ]
+    )
 
     coordinator = ACTunesCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {
