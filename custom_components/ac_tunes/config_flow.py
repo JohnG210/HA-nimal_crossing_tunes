@@ -14,20 +14,25 @@ from .const import (
     AUDIO_REMOTE,
     CONF_AUDIO_SOURCE,
     CONF_GAME,
+    CONF_GAMES,
     CONF_KK_SCHEDULE,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
     CONF_DURATION_TRACKING,
     CONF_MUSIC_VOLUME,
+    CONF_SHUFFLES_PER_HOUR,
+    CONF_SONG_DELAY,
     CONF_TOWN_TUNE_PLAYER,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_AUDIO_SOURCE,
-    DEFAULT_GAME,
+    DEFAULT_GAMES,
     DEFAULT_KK_SCHEDULE,
     DEFAULT_KK_VERSION,
+    DEFAULT_SHUFFLES_PER_HOUR,
+    DEFAULT_SONG_DELAY,
     DEFAULT_WEATHER_MODE,
     DOMAIN,
     GAME_ANIMAL_CROSSING,
@@ -35,6 +40,7 @@ from .const import (
     GAME_NEW_LEAF,
     GAME_RANDOM,
     GAME_WILD_WORLD,
+    GAMES,
     KK_AIRCHECK,
     KK_ALWAYS,
     KK_LIVE,
@@ -56,7 +62,7 @@ def _build_schema(
     return vol.Schema(
         {
             vol.Required(
-                CONF_GAME, default=d.get(CONF_GAME, DEFAULT_GAME)
+                CONF_GAMES, default=d.get(CONF_GAMES, DEFAULT_GAMES)
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
@@ -72,11 +78,9 @@ def _build_schema(
                         selector.SelectOptionDict(
                             value=GAME_NEW_HORIZONS, label="New Horizons"
                         ),
-                        selector.SelectOptionDict(
-                            value=GAME_RANDOM, label="Random"
-                        ),
                     ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.LIST,
                 )
             ),
             vol.Required(
@@ -205,6 +209,29 @@ def _build_schema(
                 CONF_DURATION_TRACKING,
                 default=d.get(CONF_DURATION_TRACKING, False),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_SONG_DELAY,
+                default=d.get(CONF_SONG_DELAY, DEFAULT_SONG_DELAY),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=3600,
+                    step=1,
+                    unit_of_measurement="seconds",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_SHUFFLES_PER_HOUR,
+                default=d.get(CONF_SHUFFLES_PER_HOUR, DEFAULT_SHUFFLES_PER_HOUR),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=10,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
         }
     )
 
@@ -212,7 +239,7 @@ def _build_schema(
 class ACTunesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Animal Crossing Tunes."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -254,8 +281,14 @@ class ACTunesOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # Use current config as defaults
+        # Use current config as defaults, migrating legacy game→games
         current = {**self._config_entry.data, **self._config_entry.options}
+        if CONF_GAME in current and CONF_GAMES not in current:
+            old_game = current.pop(CONF_GAME)
+            if old_game == GAME_RANDOM:
+                current[CONF_GAMES] = list(GAMES.keys())
+            else:
+                current[CONF_GAMES] = [old_game]
         return self.async_show_form(
             step_id="init",
             data_schema=_build_schema(current),

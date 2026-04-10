@@ -108,6 +108,18 @@ play_town_tune:
             - label: Snowy
               value: snowing
 
+set_town_tune:
+  name: Set Town Tune
+  description: Save a new 16-note town tune and regenerate the audio file.
+  fields:
+    notes:
+      name: Notes
+      description: "List of 16 note characters: g-f (lower), G-F (upper), z (rest), - (sustain)"
+      required: true
+      example: '["C", "C", "C", "E", "D", "D", "D", "F", "E", "E", "D", "D", "C", "-", "z", "z"]'
+      selector:
+        object:
+
 stop:
   name: Stop Playback
   description: Stop playback on a media player.

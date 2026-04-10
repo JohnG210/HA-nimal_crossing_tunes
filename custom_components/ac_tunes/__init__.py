@@ -16,15 +16,17 @@ from .const import (
     AUDIO_LOCAL,
     CONF_AUDIO_SOURCE,
     CONF_GAME,
+    CONF_GAMES,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
     CONF_MUSIC_VOLUME,
+    CONF_TOWN_TUNE,
     CONF_TOWN_TUNE_PLAYER,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
-    DEFAULT_GAME,
+    DEFAULT_GAMES,
     DEFAULT_KK_VERSION,
     DEFAULT_WEATHER_MODE,
     DOMAIN,
@@ -52,6 +54,7 @@ PLATFORMS: list[str] = ["switch"]
 SERVICE_PLAY_HOURLY = "play_hourly"
 SERVICE_PLAY_KK = "play_kk"
 SERVICE_PLAY_TOWN_TUNE = "play_town_tune"
+SERVICE_SET_TOWN_TUNE = "set_town_tune"
 SERVICE_STOP = "stop"
 
 PLAY_HOURLY_SCHEMA = vol.Schema(
@@ -70,6 +73,14 @@ PLAY_KK_SCHEMA = vol.Schema(
     }
 )
 
+SET_TOWN_TUNE_SCHEMA = vol.Schema(
+    {
+        vol.Required("notes"): vol.All(
+            cv.ensure_list, [cv.string], vol.Length(min=16, max=16)
+        ),
+    }
+)
+
 STOP_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): cv.entity_id,
@@ -77,12 +88,38 @@ STOP_SCHEMA = vol.Schema(
 )
 
 
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate config entry to a new version."""
+    _LOGGER.debug("Migrating from version %s", config_entry.version)
+
+    if config_entry.version == 1:
+        new_data = {**config_entry.data}
+        new_options = {**config_entry.options}
+
+        for d in (new_data, new_options):
+            old_game = d.pop(CONF_GAME, None)
+            if old_game is not None:
+                if old_game == GAME_RANDOM:
+                    d[CONF_GAMES] = list(GAMES.keys())
+                else:
+                    d[CONF_GAMES] = [old_game]
+
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=2
+        )
+        _LOGGER.info("Migration to version 2 successful")
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Animal Crossing Tunes from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     # Generate the town tune WAV file so it's ready for playback
-    await hass.async_add_executor_job(_generate_town_tune, hass)
+    cfg = {**entry.data, **entry.options}
+    town_tune_notes = cfg.get(CONF_TOWN_TUNE)
+    await hass.async_add_executor_job(_generate_town_tune, hass, town_tune_notes)
 
     coordinator = ACTunesCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {
@@ -102,12 +139,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _generate_town_tune(hass: HomeAssistant) -> None:
+def _generate_town_tune(hass: HomeAssistant, notes: list[str] | None = None) -> None:
     """Generate the town tune WAV in the www directory (runs in executor)."""
     from .town_tune import generate_town_tune_wav
 
     wav_path = hass.config.path("www", "ac_tunes", "town_tune.wav")
-    generate_town_tune_wav(output_path=wav_path)
+    generate_town_tune_wav(notes=notes, output_path=wav_path)
     _LOGGER.info("Town tune WAV generated at %s", wav_path)
 
 
@@ -124,6 +161,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_PLAY_HOURLY)
         hass.services.async_remove(DOMAIN, SERVICE_PLAY_KK)
         hass.services.async_remove(DOMAIN, SERVICE_PLAY_TOWN_TUNE)
+        hass.services.async_remove(DOMAIN, SERVICE_SET_TOWN_TUNE)
         hass.services.async_remove(DOMAIN, SERVICE_STOP)
 
     return unload_ok
@@ -147,9 +185,8 @@ def _register_services(hass: HomeAssistant) -> None:
         # Get config from first entry if available
         cfg = _get_config(hass)
 
-        game = call.data.get("game") or cfg.get(CONF_GAME, DEFAULT_GAME)
-        if game == GAME_RANDOM:
-            game = random.choice(list(GAMES.keys()))  # noqa: S311
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        game = call.data.get("game") or random.choice(games)  # noqa: S311
 
         weather = _resolve_weather(
             hass, cfg, game, call.data.get("weather")
@@ -249,9 +286,8 @@ def _register_services(hass: HomeAssistant) -> None:
 
         # Now play the current hour's track on the main player
         now = datetime.now()
-        game = call.data.get("game") or cfg.get(CONF_GAME, DEFAULT_GAME)
-        if game == GAME_RANDOM:
-            game = random.choice(list(GAMES.keys()))  # noqa: S311
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        game = call.data.get("game") or random.choice(games)  # noqa: S311
 
         weather = _resolve_weather(
             hass, cfg, game, call.data.get("weather")
@@ -282,6 +318,26 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Failed to play hourly track after town tune")
 
+    async def handle_set_town_tune(call: ServiceCall) -> None:
+        """Save a new town tune and regenerate the WAV."""
+        from .town_tune import validate_town_tune
+
+        notes = call.data["notes"]
+        if not validate_town_tune(notes):
+            _LOGGER.error("Invalid town tune notes: %s", notes)
+            return
+
+        # Save to the first config entry's options
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if entries:
+            entry = entries[0]
+            new_options = {**entry.options, CONF_TOWN_TUNE: notes}
+            hass.config_entries.async_update_entry(entry, options=new_options)
+
+        # Regenerate the WAV
+        await hass.async_add_executor_job(_generate_town_tune, hass, notes)
+        _LOGGER.info("Town tune updated: %s", notes)
+
     async def handle_stop(call: ServiceCall) -> None:
         """Handle the stop service call."""
         entity_id = call.data["entity_id"]
@@ -303,6 +359,12 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_PLAY_TOWN_TUNE,
         handle_play_town_tune,
         schema=PLAY_HOURLY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_TOWN_TUNE,
+        handle_set_town_tune,
+        schema=SET_TOWN_TUNE_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_STOP, handle_stop, schema=STOP_SCHEMA

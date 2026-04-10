@@ -6,7 +6,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import CONF_TOWN_TUNE, DOMAIN
+from .town_tune import DEFAULT_TOWN_TUNE
 
 
 async def async_setup_entry(
@@ -41,6 +42,14 @@ class ACTunesAutoPlaySwitch(SwitchEntity):
         """Enable auto-play — starts continuous playback immediately."""
         await self._coordinator.async_start()
         self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose the town tune notes for the Lovelace card."""
+        cfg = self._coordinator.config
+        return {
+            "town_tune": cfg.get(CONF_TOWN_TUNE, DEFAULT_TOWN_TUNE),
+        }
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable auto-play — stops the media player."""

@@ -52,7 +52,8 @@ KK_SATURDAYS = "saturdays"
 KK_ALWAYS = "always"
 
 # Config keys
-CONF_GAME = "game"
+CONF_GAME = "game"  # Legacy — replaced by CONF_GAMES in v2
+CONF_GAMES = "games"
 CONF_WEATHER_MODE = "weather_mode"
 CONF_MEDIA_PLAYER = "media_player_entity"
 CONF_AUDIO_SOURCE = "audio_source"
@@ -64,6 +65,9 @@ CONF_TOWN_TUNE_PLAYER = "town_tune_player"
 CONF_MUSIC_VOLUME = "music_volume"
 CONF_TOWN_TUNE_VOLUME = "town_tune_volume"
 CONF_DURATION_TRACKING = "duration_tracking"
+CONF_SONG_DELAY = "song_delay"
+CONF_SHUFFLES_PER_HOUR = "shuffles_per_hour"
+CONF_TOWN_TUNE = "town_tune"
 CONF_ENABLED = "enabled"
 
 # Audio source options
@@ -72,7 +76,10 @@ AUDIO_LOCAL = "local"
 
 # Defaults
 DEFAULT_GAME = GAME_NEW_HORIZONS
+DEFAULT_GAMES = [GAME_NEW_HORIZONS]
 DEFAULT_WEATHER_MODE = WEATHER_SUNNY
 DEFAULT_KK_SCHEDULE = KK_SATURDAYS
 DEFAULT_KK_VERSION = KK_LIVE
+DEFAULT_SONG_DELAY = 0
+DEFAULT_SHUFFLES_PER_HOUR = 0
 DEFAULT_AUDIO_SOURCE = AUDIO_REMOTE

@@ -27,23 +27,26 @@ from homeassistant.helpers.network import get_url
 from .const import (
     AUDIO_LOCAL,
     CONF_AUDIO_SOURCE,
-    CONF_GAME,
+    CONF_GAMES,
     CONF_KK_SCHEDULE,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_SHUFFLES_PER_HOUR,
+    CONF_SONG_DELAY,
     CONF_TOWN_TUNE_PLAYER,
     CONF_DURATION_TRACKING,
     CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
-    DEFAULT_GAME,
+    DEFAULT_GAMES,
     DEFAULT_KK_SCHEDULE,
     DEFAULT_KK_VERSION,
+    DEFAULT_SHUFFLES_PER_HOUR,
+    DEFAULT_SONG_DELAY,
     DEFAULT_WEATHER_MODE,
     DOMAIN,
-    GAME_RANDOM,
     GAMES,
     KK_ALWAYS,
     KK_LIVE,
@@ -96,6 +99,9 @@ class ACTunesCoordinator:
         self._unsub_state: CALLBACK_TYPE | None = None
         self._reloop_task: asyncio.Task | None = None
         self._duration_timer_task: asyncio.Task | None = None
+        self._shuffle_timers: list[asyncio.Task] = []
+        self._current_game: str | None = None
+        self._current_weather: str | None = None
 
     @property
     def config(self) -> dict:
@@ -141,6 +147,9 @@ class ACTunesCoordinator:
             self._duration_timer_task.cancel()
             self._duration_timer_task = None
 
+        # Cancel shuffle timers
+        self._cancel_shuffle_timers()
+
         # Unsubscribe listeners
         if self._unsub_hourly:
             self._unsub_hourly()
@@ -182,10 +191,11 @@ class ACTunesCoordinator:
 
         self._transitioning = True
 
-        # Cancel any running duration timer so it doesn't fire mid-transition
+        # Cancel any running duration timer and shuffle timers
         if self._duration_timer_task and not self._duration_timer_task.done():
             self._duration_timer_task.cancel()
             self._duration_timer_task = None
+        self._cancel_shuffle_timers()
 
         # Play town tune
         town_tune_url = self._get_town_tune_url()
@@ -228,9 +238,10 @@ class ACTunesCoordinator:
             return
 
         # Resolve game
-        game = cfg.get(CONF_GAME, DEFAULT_GAME)
-        if game == GAME_RANDOM:
-            game = random.choice(list(GAMES.keys()))  # noqa: S311
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        if not games:
+            games = DEFAULT_GAMES
+        game = random.choice(games)  # noqa: S311
 
         # Resolve weather
         weather = self._resolve_weather(cfg, game)
@@ -240,6 +251,8 @@ class ACTunesCoordinator:
 
         self._intentional_stop = False
         self._current_url = url
+        self._current_game = game
+        self._current_weather = weather
 
         await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
 
@@ -250,6 +263,9 @@ class ACTunesCoordinator:
 
         # Try to set repeat mode for players that support it
         await self._try_set_repeat(entity_id)
+
+        # Schedule shuffles for this hour
+        self._schedule_shuffles(now)
 
     async def _play_kk(self, cfg: dict, entity_id: str) -> None:
         """Play a random K.K. Slider song."""
@@ -308,7 +324,8 @@ class ACTunesCoordinator:
 
     async def _reloop_after_delay(self) -> None:
         """Wait briefly then re-trigger the current track."""
-        await asyncio.sleep(RELOOP_DELAY)
+        song_delay = self.config.get(CONF_SONG_DELAY, DEFAULT_SONG_DELAY)
+        await asyncio.sleep(RELOOP_DELAY + song_delay)
 
         if not self.enabled or self._intentional_stop or not self._current_url:
             return
@@ -349,7 +366,8 @@ class ACTunesCoordinator:
             _LOGGER.warning("Duration tracking: could not estimate duration for %s", url)
             return
 
-        wait_time = duration + DURATION_BUFFER
+        song_delay = self.config.get(CONF_SONG_DELAY, DEFAULT_SONG_DELAY)
+        wait_time = duration + DURATION_BUFFER + song_delay
         _LOGGER.info(
             "Duration tracking: estimated %.0fs, will re-trigger in %.0fs",
             duration,
@@ -405,6 +423,98 @@ class ACTunesCoordinator:
 
         _LOGGER.warning("No duration found for: %s", url)
         return None
+
+    # ── Shuffle scheduling ──────────────────────────────────────────
+
+    def _schedule_shuffles(self, now: datetime) -> None:
+        """Schedule track shuffles at evenly spaced intervals during the hour."""
+        self._cancel_shuffle_timers()
+
+        cfg = self.config
+        shuffles = int(cfg.get(CONF_SHUFFLES_PER_HOUR, DEFAULT_SHUFFLES_PER_HOUR))
+        if shuffles <= 0:
+            return
+
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        if not games:
+            games = DEFAULT_GAMES
+
+        # Skip if only one possible track (1 game + fixed weather)
+        weather_mode = cfg.get(CONF_WEATHER_MODE, DEFAULT_WEATHER_MODE)
+        if len(games) <= 1 and weather_mode not in (WEATHER_RANDOM, WEATHER_LIVE):
+            _LOGGER.debug("Shuffle skipped: only 1 possible track")
+            return
+
+        seconds_left = (59 - now.minute) * 60 + (60 - now.second)
+        segment = seconds_left / (shuffles + 1)
+
+        if segment < 30:
+            _LOGGER.debug("Shuffle skipped: segments too short (%.0fs)", segment)
+            return
+
+        hour = now.hour
+        for i in range(1, shuffles + 1):
+            delay = segment * i
+            task = self.hass.async_create_task(
+                self._execute_shuffle(delay, hour)
+            )
+            self._shuffle_timers.append(task)
+
+        _LOGGER.info(
+            "Scheduled %d shuffles for hour %d (every %.0fs)",
+            shuffles, hour, segment,
+        )
+
+    async def _execute_shuffle(self, delay: float, hour: int) -> None:
+        """Wait, then switch to a different track."""
+        await asyncio.sleep(delay)
+
+        if not self.enabled or self._intentional_stop or self._transitioning:
+            return
+
+        now = datetime.now()
+        if now.hour != hour:
+            return
+
+        cfg = self.config
+        entity_id = cfg.get(CONF_MEDIA_PLAYER)
+        if not entity_id:
+            return
+
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        if not games:
+            games = DEFAULT_GAMES
+
+        # Prefer a different game than the current one
+        if len(games) > 1 and self._current_game in games:
+            other_games = [g for g in games if g != self._current_game]
+            game = random.choice(other_games)  # noqa: S311
+        else:
+            game = random.choice(games)  # noqa: S311
+
+        weather = self._resolve_weather(cfg, game)
+        url = self._build_hourly_url(cfg, game, weather, now.hour)
+
+        self._current_url = url
+        self._current_game = game
+        self._current_weather = weather
+
+        # Cancel current duration timer so it doesn't re-trigger the old track
+        if self._duration_timer_task and not self._duration_timer_task.done():
+            self._duration_timer_task.cancel()
+            self._duration_timer_task = None
+
+        _LOGGER.info(
+            "Shuffle: switching to %s/%s hour %d", game, weather, now.hour
+        )
+        await self._call_play_media(entity_id, url)
+
+    def _cancel_shuffle_timers(self) -> None:
+        """Cancel all pending shuffle tasks."""
+        for task in self._shuffle_timers:
+            if not task.done():
+                task.cancel()
+        self._shuffle_timers.clear()
 
     # ── Helpers ────────────────────────────────────────────────────
 
