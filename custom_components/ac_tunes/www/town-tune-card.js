@@ -7,7 +7,7 @@
  *
  * Config:
  *   type: custom:town-tune-card
- *   entity: switch.ac_tunes_auto_play   (optional, defaults to this)
+ *   entity: switch.auto_play   (optional, defaults to this)
  */
 
 const PITCHES = [
@@ -62,12 +62,13 @@ class TownTuneCard extends HTMLElement {
     this._hass = hass;
     if (!this._initialized) return;
 
-    // Read tune from entity attribute
-    if (!this._tuneLoaded) {
-      this._tuneLoaded = true;
-      const entity = this._config.entity || "switch.ac_tunes_auto_play";
-      const state = hass.states[entity];
-      if (state && state.attributes.town_tune) {
+    // Sync tune from entity attribute whenever it changes
+    const entity = this._config.entity || "switch.auto_play";
+    const state = hass.states[entity];
+    if (state && state.attributes.town_tune) {
+      const incoming = JSON.stringify(state.attributes.town_tune);
+      if (incoming !== this._lastKnownTune) {
+        this._lastKnownTune = incoming;
         this._tune = [...state.attributes.town_tune];
         this._updateAllSliders();
         this._updateStaff();
@@ -124,6 +125,7 @@ class TownTuneCard extends HTMLElement {
 
     this._buildStaff();
     this._buildEditor();
+    this._updateAllSliders();
     this._updateStaff();
 
     this.shadowRoot.getElementById("btn-play").addEventListener("click", () => this._playTune());
@@ -530,7 +532,6 @@ class TownTuneCard extends HTMLElement {
     pitch.appendChild(octave);
     pitch.appendChild(sliderWrap);
 
-    this._updateNote(index);
     return pitch;
   }
 
@@ -606,10 +607,13 @@ class TownTuneCard extends HTMLElement {
 
       const freq = PITCH_FREQ[note];
       if (freq > 0) {
+        // Count how many sustain slots follow this note
+        let beats = 1;
+        for (let j = i + 1; j < 16 && this._tune[j] === "-"; j++) beats++;
         lastFreq = freq;
-        this._playBell(this._audioCtx, freq);
-      } else if (note === "-" && lastFreq > 0) {
-        // sustain — previous note rings
+        this._playBell(this._audioCtx, freq, beats);
+      } else if (note === "-") {
+        // sustain — bell is already ringing from the original note
       } else {
         lastFreq = 0;
       }
@@ -622,7 +626,7 @@ class TownTuneCard extends HTMLElement {
     this._playing = false;
   }
 
-  _playBell(ctx, freq) {
+  _playBell(ctx, freq, beats = 1) {
     const now = ctx.currentTime;
     const partials = [
       [1.0, 0.45, 4.0],
@@ -631,17 +635,43 @@ class TownTuneCard extends HTMLElement {
       [4.0, 0.08, 9.0],
       [5.92, 0.05, 12.0],
     ];
+    // Bell strike (always the same sharp attack)
     for (const [ratio, amp, decay] of partials) {
+      const ringTime = 1.0 / decay + 0.1;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = freq * ratio;
       gain.gain.setValueAtTime(amp * 0.4, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0 / decay + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + ringTime);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(now);
-      osc.stop(now + 1.0 / decay + 0.15);
+      osc.stop(now + ringTime + 0.05);
+    }
+    // Sustained tone for held notes — gentle pad under the bell
+    if (beats > 1) {
+      const holdDur = beats * 0.3;
+      const fadeOut = 0.08;
+      const sus = ctx.createOscillator();
+      const sus2 = ctx.createOscillator();
+      const g = ctx.createGain();
+      sus.type = "sine";
+      sus.frequency.value = freq;
+      sus2.type = "sine";
+      sus2.frequency.value = freq * 2;
+      sus.connect(g);
+      sus2.connect(g);
+      g.connect(ctx.destination);
+      // Fade in gently after the bell attack, hold, then fade out
+      g.gain.setValueAtTime(0.001, now);
+      g.gain.linearRampToValueAtTime(0.12, now + 0.05);
+      g.gain.setValueAtTime(0.12, now + holdDur - fadeOut);
+      g.gain.linearRampToValueAtTime(0.001, now + holdDur);
+      sus.start(now);
+      sus2.start(now);
+      sus.stop(now + holdDur + 0.01);
+      sus2.stop(now + holdDur + 0.01);
     }
   }
 
@@ -695,7 +725,7 @@ class TownTuneCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity: "switch.ac_tunes_auto_play" };
+    return { entity: "switch.auto_play" };
   }
 }
 

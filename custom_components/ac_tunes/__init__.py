@@ -1,4 +1,4 @@
-"""Animal Crossing Tunes - Home Assistant integration."""
+"""HA-nimal Crossing Tunes - Home Assistant integration."""
 from __future__ import annotations
 
 import logging
@@ -116,7 +116,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Animal Crossing Tunes from a config entry."""
+    """Set up HA-nimal Crossing Tunes from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     # Generate the town tune WAV only if one doesn't exist yet

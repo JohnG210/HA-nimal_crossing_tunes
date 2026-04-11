@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Animal Crossing Tunes",
+        "title": "HA-nimal Crossing Tunes",
         "description": "Set up Animal Crossing hourly music.",
         "data": {
           "games": "Games",
@@ -23,13 +23,13 @@
       }
     },
     "abort": {
-      "already_configured": "Animal Crossing Tunes is already configured."
+      "already_configured": "HA-nimal Crossing Tunes is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Animal Crossing Tunes Options",
+        "title": "HA-nimal Crossing Tunes Options",
         "data": {
           "games": "Games",
           "weather_mode": "Weather Mode",

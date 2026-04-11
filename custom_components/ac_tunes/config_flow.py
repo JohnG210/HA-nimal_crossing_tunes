@@ -1,4 +1,4 @@
-"""Config flow for Animal Crossing Tunes."""
+"""Config flow for HA-nimal Crossing Tunes."""
 from __future__ import annotations
 
 from typing import Any
@@ -23,6 +23,7 @@ from .const import (
     CONF_MUSIC_VOLUME,
     CONF_SHUFFLES_PER_HOUR,
     CONF_SONG_DELAY,
+    CONF_TOWN_TUNE,
     CONF_TOWN_TUNE_PLAYER,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
@@ -237,7 +238,7 @@ def _build_schema(
 
 
 class ACTunesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Animal Crossing Tunes."""
+    """Handle a config flow for HA-nimal Crossing Tunes."""
 
     VERSION = 2
 
@@ -250,7 +251,7 @@ class ACTunesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             return self.async_create_entry(
-                title="Animal Crossing Tunes", data=user_input
+                title="HA-nimal Crossing Tunes", data=user_input
             )
 
         return self.async_show_form(
@@ -268,7 +269,7 @@ class ACTunesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ACTunesOptionsFlow(config_entries.OptionsFlow):
-    """Handle options flow for Animal Crossing Tunes."""
+    """Handle options flow for HA-nimal Crossing Tunes."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
@@ -279,6 +280,10 @@ class ACTunesOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
+            # Preserve town tune (saved via service, not in this form)
+            existing_tune = self._config_entry.options.get(CONF_TOWN_TUNE)
+            if existing_tune is not None:
+                user_input[CONF_TOWN_TUNE] = existing_tune
             return self.async_create_entry(title="", data=user_input)
 
         # Use current config as defaults, migrating legacy game→games
