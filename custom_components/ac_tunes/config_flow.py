@@ -16,6 +16,7 @@ from .const import (
     CONF_GAME,
     CONF_GAMES,
     CONF_KK_SCHEDULE,
+    CONF_KK_SHUFFLE_NO_REPEATS,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
@@ -170,6 +171,10 @@ def _build_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Optional(
+                CONF_KK_SHUFFLE_NO_REPEATS,
+                default=d.get(CONF_KK_SHUFFLE_NO_REPEATS, False),
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_WEATHER_ENTITY,
                 description={"suggested_value": d.get(CONF_WEATHER_ENTITY)},

@@ -67,6 +67,7 @@ CONF_TOWN_TUNE_VOLUME = "town_tune_volume"
 CONF_DURATION_TRACKING = "duration_tracking"
 CONF_SONG_DELAY = "song_delay"
 CONF_SHUFFLES_PER_HOUR = "shuffles_per_hour"
+CONF_KK_SHUFFLE_NO_REPEATS = "kk_shuffle_no_repeats"
 CONF_TOWN_TUNE = "town_tune"
 CONF_ENABLED = "enabled"
 

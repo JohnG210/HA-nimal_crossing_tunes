@@ -29,6 +29,7 @@ from .const import (
     CONF_AUDIO_SOURCE,
     CONF_GAMES,
     CONF_KK_SCHEDULE,
+    CONF_KK_SHUFFLE_NO_REPEATS,
     CONF_KK_VERSION,
     CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
@@ -56,6 +57,7 @@ from .const import (
     WEATHER_SUNNY,
 )
 from .music_data import (
+    ALL_KK_SONGS,
     get_available_weathers,
     get_hourly_url,
     get_hourly_url_local,
@@ -102,6 +104,7 @@ class ACTunesCoordinator:
         self._shuffle_timers: list[asyncio.Task] = []
         self._current_game: str | None = None
         self._current_weather: str | None = None
+        self._kk_played_songs: list[str] = []
 
     @property
     def config(self) -> dict:
@@ -269,7 +272,7 @@ class ACTunesCoordinator:
 
     async def _play_kk(self, cfg: dict, entity_id: str) -> None:
         """Play a random K.K. Slider song."""
-        song = get_random_kk_song()
+        song = self._pick_kk_song(cfg)
         version = cfg.get(CONF_KK_VERSION, DEFAULT_KK_VERSION)
 
         if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
@@ -287,6 +290,24 @@ class ACTunesCoordinator:
 
         _LOGGER.info("Playing K.K. Slider: %s (%s) on %s", song, version, entity_id)
         await self._call_play_media(entity_id, url)
+
+        # Schedule K.K. shuffles for this hour
+        self._schedule_kk_shuffles(datetime.now())
+
+    def _pick_kk_song(self, cfg: dict) -> str:
+        """Pick a K.K. song, respecting no-repeats if enabled."""
+        if not cfg.get(CONF_KK_SHUFFLE_NO_REPEATS):
+            return get_random_kk_song()
+
+        available = [s for s in ALL_KK_SONGS if s not in self._kk_played_songs]
+        if not available:
+            self._kk_played_songs.clear()
+            available = list(ALL_KK_SONGS)
+            _LOGGER.debug("K.K. no-repeats: pool exhausted, resetting")
+
+        song = random.choice(available)  # noqa: S311
+        self._kk_played_songs.append(song)
+        return song
 
     # ── Looping via state monitoring ───────────────────────────────
 
@@ -515,6 +536,74 @@ class ACTunesCoordinator:
             if not task.done():
                 task.cancel()
         self._shuffle_timers.clear()
+
+    # ── K.K. Slider shuffle scheduling ─────────────────────────────
+
+    def _schedule_kk_shuffles(self, now: datetime) -> None:
+        """Schedule K.K. song shuffles at evenly spaced intervals during the hour."""
+        self._cancel_shuffle_timers()
+
+        cfg = self.config
+        shuffles = int(cfg.get(CONF_SHUFFLES_PER_HOUR, DEFAULT_SHUFFLES_PER_HOUR))
+        if shuffles <= 0:
+            return
+
+        seconds_left = (59 - now.minute) * 60 + (60 - now.second)
+        segment = seconds_left / (shuffles + 1)
+
+        if segment < 30:
+            _LOGGER.debug("K.K. shuffle skipped: segments too short (%.0fs)", segment)
+            return
+
+        hour = now.hour
+        for i in range(1, shuffles + 1):
+            delay = segment * i
+            task = self.hass.async_create_task(
+                self._execute_kk_shuffle(delay, hour)
+            )
+            self._shuffle_timers.append(task)
+
+        _LOGGER.info(
+            "Scheduled %d K.K. shuffles for hour %d (every %.0fs)",
+            shuffles, hour, segment,
+        )
+
+    async def _execute_kk_shuffle(self, delay: float, hour: int) -> None:
+        """Wait, then switch to a different K.K. song."""
+        await asyncio.sleep(delay)
+
+        if not self.enabled or self._intentional_stop or self._transitioning:
+            return
+
+        now = datetime.now()
+        if now.hour != hour:
+            return
+
+        cfg = self.config
+        entity_id = cfg.get(CONF_MEDIA_PLAYER)
+        if not entity_id:
+            return
+
+        song = self._pick_kk_song(cfg)
+        version = cfg.get(CONF_KK_VERSION, DEFAULT_KK_VERSION)
+
+        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
+            from urllib.parse import quote
+
+            encoded = quote(f"{song}.ogg")
+            url = f"{self._get_ha_base_url()}/local/ac_tunes/kk/{version}/{encoded}"
+        else:
+            url = get_kk_url(song, version)
+
+        self._current_url = url
+
+        # Cancel current duration timer so it doesn't re-trigger the old track
+        if self._duration_timer_task and not self._duration_timer_task.done():
+            self._duration_timer_task.cancel()
+            self._duration_timer_task = None
+
+        _LOGGER.info("K.K. shuffle: switching to %s (%s)", song, version)
+        await self._call_play_media(entity_id, url)
 
     # ── Helpers ────────────────────────────────────────────────────
 
