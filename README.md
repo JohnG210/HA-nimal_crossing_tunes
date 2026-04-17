@@ -14,7 +14,7 @@ A Home Assistant custom integration that plays hourly Animal Crossing music on a
 - **Hourly Music** — Automatically plays the correct hourly track synced to your real clock
 - **4 Game Soundtracks** — Animal Crossing, Wild World & City Folk, New Leaf, New Horizons
 - **Multi-Game Select** — Pick multiple games and shuffle between them
-- **Weather Variants** — Sunny, rainy, and snowy versions; optional live weather from your HA weather entity
+- **Weather Variants** — Sunny, rainy, and snowy versions; optional live weather from your HA weather entity with mid-song weather switching
 - **Song Delay** — Configurable delay (in seconds) between songs
 - **Shuffles Per Hour** — Optionally shuffle to a different game's track multiple times per hour
 - **K.K. Slider** — Browse and play ~95 K.K. Slider songs (live and aircheck versions); optional Saturday night auto-play
@@ -24,6 +24,7 @@ A Home Assistant custom integration that plays hourly Animal Crossing music on a
 - **Media Browser** — Full browsable music library in HA's Media Browser
 - **Automation Services** — `play_hourly`, `play_kk`, `play_town_tune`, `set_town_tune`, `stop`
 - **Auto-Play Switch** — Toggle hourly auto-play on/off from the HA UI
+- **AC Clock Card** — Animal Crossing-themed clock with analog/digital modes, dynamic sky, and now-playing info (View Assist compatible)
 
 ## Installation
 
@@ -54,6 +55,59 @@ The town tune editor card is bundled with the integration and served automatical
    ```
 
 <img src="images/town-tune-editor.png" alt="Town Tune Editor Card" width="420">
+
+### Animal Crossing Clock Card
+
+An AC-themed clock card with dynamic sky background, weather icons, and now-playing info. Supports analog and digital modes.
+
+1. Add the resource in **Settings → Dashboards → Resources** (or via YAML):
+   ```yaml
+   resources:
+     - url: /ac_tunes/ac-clock-card.js
+       type: module
+   ```
+2. Add a **Manual Card** to your dashboard:
+   ```yaml
+   type: custom:ac-clock-card
+   entity: switch.ac_tunes_auto_play
+   mode: analog          # "analog" or "digital"
+   time_format: 12       # 12 or 24
+   show_weather: true    # show weather icon
+   show_now_playing: true # show game/track info
+   ```
+
+#### View Assist Integration
+
+To use the clock card on a View Assist satellite display:
+
+1. Add a panel view to your **ViewAssist** dashboard:
+   ```yaml
+   views:
+     - title: AC Clock
+       path: ac-clock
+       panel: true
+       cards:
+         - type: custom:ac-clock-card
+           entity: switch.ac_tunes_auto_play
+           mode: analog
+   ```
+
+2. Create a custom sentence automation for voice activation:
+   ```yaml
+   automation:
+     - alias: "VA - Show AC Clock"
+       trigger:
+         - platform: conversation
+           command:
+             - "show animal crossing clock"
+             - "show AC clock"
+       action:
+         - service: browser_mod.navigate
+           data:
+             path: /dashboard-viewassist/ac-clock
+           target:
+             device_id: "{{ trigger.device_id }}"
+   ```
 
 ### Manual
 

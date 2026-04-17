@@ -43,12 +43,19 @@ class ACTunesAutoPlaySwitch(SwitchEntity):
         await self._coordinator.async_start()
         self.async_write_ha_state()
 
+    async def async_added_to_hass(self) -> None:
+        """Register state listener when entity is added to HA."""
+        self._coordinator.register_state_listener(self.async_write_ha_state)
+
     @property
     def extra_state_attributes(self) -> dict:
-        """Expose the town tune notes for the Lovelace card."""
+        """Expose playback state and town tune for Lovelace cards."""
         cfg = self._coordinator.config
         return {
             "town_tune": cfg.get(CONF_TOWN_TUNE, DEFAULT_TOWN_TUNE),
+            "current_game": self._coordinator._current_game,
+            "current_weather": self._coordinator._current_weather,
+            "is_playing": self._coordinator.enabled,
         }
 
     async def async_turn_off(self, **kwargs) -> None:

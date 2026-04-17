@@ -105,11 +105,22 @@ class ACTunesCoordinator:
         self._current_game: str | None = None
         self._current_weather: str | None = None
         self._kk_played_songs: list[str] = []
+        self._state_listeners: list = []
 
     @property
     def config(self) -> dict:
         """Return merged config (entry data + options)."""
         return {**self.entry.data, **self.entry.options}
+
+    def register_state_listener(self, listener) -> None:
+        """Register a callback to be invoked when playback state changes."""
+        self._state_listeners.append(listener)
+
+    @callback
+    def _notify_state_listeners(self) -> None:
+        """Notify all registered listeners of a state change."""
+        for listener in self._state_listeners:
+            listener()
 
     async def async_start(self) -> None:
         """Start continuous playback."""
@@ -139,6 +150,9 @@ class ACTunesCoordinator:
         self.enabled = False
         self._intentional_stop = True
         self._current_url = None
+        self._current_game = None
+        self._current_weather = None
+        self._notify_state_listeners()
 
         # Cancel pending re-loop
         if self._reloop_task and not self._reloop_task.done():
@@ -256,6 +270,7 @@ class ACTunesCoordinator:
         self._current_url = url
         self._current_game = game
         self._current_weather = weather
+        self._notify_state_listeners()
 
         await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
 
@@ -358,8 +373,15 @@ class ACTunesCoordinator:
         # Check the player is still idle (not playing something else)
         state = self.hass.states.get(entity_id)
         if state and state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED):
-            _LOGGER.debug("Re-looping track: %s", self._current_url)
-            await self._call_play_media(entity_id, self._current_url)
+            # Re-check weather; use updated URL if changed, else current
+            new_url = self._refresh_weather_url()
+            url = new_url or self._current_url
+            _LOGGER.debug(
+                "Re-looping track: %s%s",
+                url,
+                " (weather updated)" if new_url else "",
+            )
+            await self._call_play_media(entity_id, url)
 
     # ── Duration tracking (timer-based fallback) ────────────────
 
@@ -406,11 +428,19 @@ class ACTunesCoordinator:
         if not entity_id:
             return
 
-        _LOGGER.info("Duration tracking: timer fired, re-looping %s", url)
-        await self._call_play_media(entity_id, url)
+        # Re-check weather before re-triggering
+        new_url = self._refresh_weather_url()
+        play_url = new_url or url
 
-        # Schedule the next timer for the same track
-        self._schedule_duration_timer(url)
+        _LOGGER.info(
+            "Duration tracking: timer fired, re-looping %s%s",
+            play_url,
+            " (weather updated)" if new_url else "",
+        )
+        await self._call_play_media(entity_id, play_url)
+
+        # Schedule the next timer for the (possibly updated) track
+        self._schedule_duration_timer(play_url)
 
     def _get_track_duration(self, url: str) -> float | None:
         """Look up track duration from the hardcoded duration table.
@@ -519,6 +549,7 @@ class ACTunesCoordinator:
         self._current_url = url
         self._current_game = game
         self._current_weather = weather
+        self._notify_state_listeners()
 
         # Cancel current duration timer so it doesn't re-trigger the old track
         if self._duration_timer_task and not self._duration_timer_task.done():
@@ -700,6 +731,37 @@ class ACTunesCoordinator:
             hour_str = format_hour(hour)
             return f"{self._get_ha_base_url()}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
         return get_hourly_url(game, weather, hour)
+
+    def _refresh_weather_url(self) -> str | None:
+        """Re-check weather and return updated URL if weather changed.
+
+        Keeps the current game (no re-randomization), only refreshes the
+        weather variant from the configured source.  Returns None when
+        the weather has not changed or during K.K. Slider playback.
+        """
+        cfg = self.config
+        game = self._current_game
+        if not game:
+            return None  # K.K. Slider playing — no weather variant
+
+        weather = self._resolve_weather(cfg, game)
+        if weather == self._current_weather:
+            return None  # No change
+
+        now = datetime.now()
+        url = self._build_hourly_url(cfg, game, weather, now.hour)
+
+        self._current_weather = weather
+        self._current_url = url
+
+        _LOGGER.info(
+            "Weather changed to %s, switching track for %s hour %d",
+            weather,
+            game,
+            now.hour,
+        )
+        self._notify_state_listeners()
+        return url
 
     def _get_ha_base_url(self) -> str:
         """Get the HA base URL for serving local files."""

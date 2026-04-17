@@ -3,11 +3,11 @@
   "name": "HA-nimal Crossing Tunes",
   "codeowners": ["@JohnG210"],
   "config_flow": true,
-  "dependencies": ["http", "media_source"],
+  "dependencies": ["frontend", "http", "media_source"],
   "documentation": "https://github.com/JohnG210/HA-nimal_crossing_tunes",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/JohnG210/HA-nimal_crossing_tunes/issues",
   "requirements": [],
-  "version": "0.1.8"
+  "version": "0.2.0"
 }

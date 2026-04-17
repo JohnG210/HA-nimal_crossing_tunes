@@ -115,6 +115,31 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
     return True
 
 
+_CARD_RESOURCES = [
+    "/ac_tunes/town-tune-card.js",
+    "/ac_tunes/ac-clock-card.js",
+]
+
+
+async def _async_register_card_resources(hass: HomeAssistant) -> None:
+    """Auto-register Lovelace card JS modules (storage mode only)."""
+    lovelace = hass.data.get("lovelace")
+    if lovelace is None or lovelace.mode != "storage":
+        return
+
+    try:
+        resources = lovelace.resources
+        existing = {r["url"].split("?")[0] for r in resources.async_items()}
+        for card_url in _CARD_RESOURCES:
+            if card_url not in existing:
+                await resources.async_create_item(
+                    {"res_type": "module", "url": card_url}
+                )
+                _LOGGER.debug("Registered Lovelace resource: %s", card_url)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not auto-register Lovelace resources")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA-nimal Crossing Tunes from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -126,7 +151,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not wav_path.exists():
         await hass.async_add_executor_job(_generate_town_tune, hass, town_tune_notes)
 
-    # Serve the town-tune-card.js frontend panel
+    # Serve the frontend cards (town tune editor + AC clock)
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
@@ -134,6 +159,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         ]
     )
+
+    # Auto-register Lovelace card resources (storage mode only)
+    await _async_register_card_resources(hass)
 
     coordinator = ACTunesCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {
