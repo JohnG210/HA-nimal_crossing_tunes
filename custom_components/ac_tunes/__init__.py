@@ -123,12 +123,20 @@ _CARD_RESOURCES = [
 
 async def _async_register_card_resources(hass: HomeAssistant) -> None:
     """Auto-register Lovelace card JS modules (storage mode only)."""
-    lovelace = hass.data.get("lovelace")
-    if lovelace is None or lovelace.mode != "storage":
-        return
-
     try:
-        resources = lovelace.resources
+        lovelace = hass.data.get("lovelace")
+        if lovelace is None:
+            return
+
+        # Check for storage mode — attribute name varies by HA version
+        mode = getattr(lovelace, "mode", None)
+        if mode is not None and mode != "storage":
+            return
+
+        resources = getattr(lovelace, "resources", None)
+        if resources is None:
+            return
+
         existing = {r["url"].split("?")[0] for r in resources.async_items()}
         for card_url in _CARD_RESOURCES:
             if card_url not in existing:
