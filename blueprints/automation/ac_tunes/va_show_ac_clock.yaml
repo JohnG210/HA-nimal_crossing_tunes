@@ -2,39 +2,80 @@ blueprint:
   name: "View Assist - Show Animal Crossing Clock"
   description: >
     Navigate a View Assist satellite device to the Animal Crossing Clock
-    view when a voice command is spoken. Requires the ac-clock-card to be
-    set up on a ViewAssist dashboard panel view with path "ac-clock".
+    view when a voice command is spoken. Optionally starts music playback
+    (with town tune) when the clock is shown. Requires the ac-clock-card
+    to be set up on a ViewAssist dashboard panel view with path "ac-clock".
   domain: automation
   input:
-    dashboard_path:
-      name: Dashboard Path
-      description: The path of your ViewAssist dashboard (e.g. dashboard-viewassist)
-      default: dashboard-viewassist
+    satellite_device:
+      name: Satellite Device
+      description: >
+        The View Assist satellite sensor entity (e.g. sensor.desk_echo_show).
+        Used as the default target when triggered manually from the UI.
       selector:
-        text:
+        entity:
+          filter:
+            domain: sensor
     view_path:
       name: View Path
-      description: The path of the AC Clock view on the dashboard
-      default: ac-clock
+      description: >
+        The full dashboard path to the AC Clock view
+        (e.g. /dashboard-viewassist/ac-clock)
+      default: /dashboard-viewassist/ac-clock
       selector:
         text:
-    voice_commands:
-      name: Voice Commands
-      description: Phrases that trigger the clock view (comma-separated)
-      default: "show animal crossing clock,show AC clock,animal crossing clock"
+    start_music:
+      name: Start Music
+      description: Start playing Animal Crossing music when the clock is shown
+      default: true
       selector:
-        text:
+        boolean:
+    media_player:
+      name: Media Player
+      description: >
+        Media player to use for playback (only used when Start Music is
+        enabled). Leave empty to use the satellite's default media player.
+      default: ""
+      selector:
+        entity:
+          filter:
+            domain: media_player
 
-trigger:
-  - platform: conversation
+triggers:
+  - trigger: conversation
     command:
       - "show animal crossing clock"
       - "show AC clock"
       - "animal crossing clock"
 
-action:
-  - service: browser_mod.navigate
+variables:
+  fallback_satellite: !input satellite_device
+  target_satellite_device: >
+    {% if trigger is defined and trigger.device_id is defined and trigger.device_id %}
+      {{ view_assist_entity(trigger.device_id) }}
+    {% else %}
+      {{ fallback_satellite }}
+    {% endif %}
+  target_mediaplayer_device: "{{ state_attr(target_satellite_device, 'mediaplayer_device') }}"
+  view: !input view_path
+  start_music: !input start_music
+  player_input: !input media_player
+  player: "{{ player_input if player_input else target_mediaplayer_device }}"
+
+actions:
+  - action: view_assist.navigate
     data:
-      path: "/{{ dashboard_path }}/{{ view_path }}"
-    target:
-      device_id: "{{ trigger.device_id }}"
+      device: "{{ target_satellite_device }}"
+      path: "{{ view }}"
+
+  - condition: template
+    value_template: "{{ start_music and player != '' }}"
+
+  - condition: template
+    value_template: "{{ not is_state(player, 'playing') }}"
+
+  - action: ac_tunes.play_town_tune
+    data:
+      entity_id: "{{ player }}"
+
+  - set_conversation_response: ""
