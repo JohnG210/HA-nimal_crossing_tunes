@@ -57,6 +57,7 @@ from .const import (
 from .coordinator import TOWN_TUNE_DURATION, ACTunesCoordinator
 from .helpers import get_config as _get_config
 from .music_data import get_available_weathers, map_weather_state
+from .vaca_clock import async_show_clock_after_playback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -250,6 +251,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
             )
             await player.async_play(hass, entity_id, media_id)
+            await async_show_clock_after_playback(hass, cfg, entity_id)
 
     async def handle_play_kk(call: ServiceCall) -> None:
         """Handle the play_kk service call."""
@@ -264,6 +266,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
             )
             await player.async_play(hass, entity_id, media_id)
+            await async_show_clock_after_playback(hass, cfg, entity_id)
 
     async def handle_play_town_tune(call: ServiceCall) -> None:
         """Play the town tune, then start the current hour's track."""
@@ -310,6 +313,7 @@ def _register_services(hass: HomeAssistant) -> None:
                     hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
                 )
                 await player.async_play(hass, entity_id, hourly_id)
+                await async_show_clock_after_playback(hass, cfg, entity_id)
             except HomeAssistantError:
                 _LOGGER.warning(
                     "Failed to play hourly track after town tune on %s",

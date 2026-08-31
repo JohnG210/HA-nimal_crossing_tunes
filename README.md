@@ -78,7 +78,8 @@ An AC-themed clock card with dynamic sky background, weather icons, and now-play
 
 #### View Assist Integration
 
-To use the clock card on a View Assist satellite display:
+To show the clock automatically on a View Assist / VACA satellite whenever this
+integration starts music on its configured speaker:
 
 1. Add a panel view to your **ViewAssist** dashboard:
    ```yaml
@@ -91,23 +92,21 @@ To use the clock card on a View Assist satellite display:
            entity: switch.ac_tunes_auto_play
            mode: analog
    ```
+2. In **Settings → Devices & Services → HA-nimal Crossing Tunes → Configure**:
+   - Enable **Show Animal Crossing Clock on View Assist display**.
+   - Select the paired View Assist sensor, for example `sensor.desk_echo_show`.
+   - Keep **Animal Crossing Clock view path** at
+     `/dashboard-viewassist/ac-clock`, or enter the full path for your
+     ViewAssist dashboard.
 
-2. Create a custom sentence automation for voice activation:
-   ```yaml
-   automation:
-     - alias: "VA - Show AC Clock"
-       trigger:
-         - platform: conversation
-           command:
-             - "show animal crossing clock"
-             - "show AC clock"
-       action:
-         - service: browser_mod.navigate
-           data:
-             path: /dashboard-viewassist/ac-clock
-           target:
-             device_id: "{{ trigger.device_id }}"
-   ```
+The integration intentionally requires this explicit pairing. If View Assist is
+not installed, the selected entity is not a VACA display, the option is off, or
+music is sent to another player, playback continues normally and no screen is
+changed. Navigation happens *after* the music starts, because VACA may first
+switch itself to its music page during media playback.
+
+The bundled **View Assist - Show Animal Crossing Clock** blueprint remains
+available when you also want to open the clock by voice command.
 
 ### Manual
 

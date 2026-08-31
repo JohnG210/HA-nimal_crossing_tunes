@@ -69,6 +69,9 @@ CONF_SONG_DELAY = "song_delay"
 CONF_SHUFFLES_PER_HOUR = "shuffles_per_hour"
 CONF_KK_SHUFFLE_NO_REPEATS = "kk_shuffle_no_repeats"
 CONF_TOWN_TUNE = "town_tune"
+CONF_SHOW_VACA_CLOCK = "show_vaca_clock"
+CONF_VACA_DISPLAY_ENTITY = "vaca_display_entity"
+CONF_VACA_CLOCK_PATH = "vaca_clock_path"
 CONF_ENABLED = "enabled"
 
 # Audio source options
@@ -84,6 +87,7 @@ DEFAULT_KK_VERSION = KK_LIVE
 DEFAULT_SONG_DELAY = 0
 DEFAULT_SHUFFLES_PER_HOUR = 0
 DEFAULT_AUDIO_SOURCE = AUDIO_REMOTE
+DEFAULT_VACA_CLOCK_PATH = "/dashboard-viewassist/ac-clock"
 # Served from config/www/ac_tunes/. Kept relative so that Home Assistant's
 # async_process_play_media_url can sign it and make it absolute.
 DEFAULT_LOCAL_PATH = "/local/ac_tunes"
