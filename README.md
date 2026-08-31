@@ -130,13 +130,26 @@ To use the clock card on a View Assist satellite display:
 
 ## Services
 
+All playback services take a standard Home Assistant **target**, so you can
+point them at an entity, a device or a whole area:
+
+```yaml
+action: ac_tunes.play_hourly
+target:
+  entity_id: media_player.living_room
+data:
+  game: new-horizons
+```
+
+Passing `entity_id` under `data:` still works for existing automations.
+
 ### `ac_tunes.play_hourly`
 
 Play the current hour's track on a media player.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `entity_id` | Yes | Target media player entity |
+| target | Yes | Media player entity, device or area |
 | `game` | No | Game override (uses config default) |
 | `weather` | No | Weather override (uses config default) |
 
@@ -146,17 +159,19 @@ Play a K.K. Slider song.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `entity_id` | Yes | Target media player entity |
+| target | Yes | Media player entity, device or area |
 | `song_name` | Yes | K.K. Slider song name |
 | `version` | No | `live` (default) or `aircheck` |
 
 ### `ac_tunes.play_town_tune`
 
-Play the town tune chime, then start the current hour's track.
+Play the town tune chime, then start the current hour's track. On players
+that support announcements the chime is played over the music and the
+player resumes on its own.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `entity_id` | Yes | Target media player entity |
+| target | Yes | Media player entity, device or area |
 | `game` | No | Game override (uses config default) |
 | `weather` | No | Weather override (uses config default) |
 
@@ -174,7 +189,7 @@ Stop playback on a media player.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `entity_id` | Yes | Target media player entity |
+| target | Yes | Media player entity, device or area |
 
 ## Media Browser
 

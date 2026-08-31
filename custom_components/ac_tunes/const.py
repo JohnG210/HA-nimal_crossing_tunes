@@ -84,3 +84,10 @@ DEFAULT_KK_VERSION = KK_LIVE
 DEFAULT_SONG_DELAY = 0
 DEFAULT_SHUFFLES_PER_HOUR = 0
 DEFAULT_AUDIO_SOURCE = AUDIO_REMOTE
+# Served from config/www/ac_tunes/. Kept relative so that Home Assistant's
+# async_process_play_media_url can sign it and make it absolute.
+DEFAULT_LOCAL_PATH = "/local/ac_tunes"
+
+# The generated town tune always lives in config/www/ac_tunes/, regardless
+# of where the music library is configured to live.
+TOWN_TUNE_URL_PATH = "/local/ac_tunes/town_tune.wav"

@@ -1,7 +1,9 @@
 """HA-nimal Crossing Tunes - Home Assistant integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import random
 from datetime import datetime
 
@@ -10,19 +12,17 @@ import voluptuous as vol
 from pathlib import Path
 
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.network import get_url
+from homeassistant.helpers import service as service_helper
 
+from . import player
 from .const import (
-    AUDIO_LOCAL,
-    CONF_AUDIO_SOURCE,
     CONF_GAME,
     CONF_GAMES,
-    CONF_KK_VERSION,
-    CONF_LOCAL_PATH,
-    CONF_MEDIA_PLAYER,
     CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE,
     CONF_TOWN_TUNE_PLAYER,
@@ -30,7 +30,6 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_GAMES,
-    DEFAULT_KK_VERSION,
     DEFAULT_WEATHER_MODE,
     DOMAIN,
     GAME_RANDOM,
@@ -40,15 +39,9 @@ from .const import (
     WEATHER_RANDOM,
     WEATHER_SUNNY,
 )
-from .coordinator import ACTunesCoordinator
-from .music_data import (
-    get_available_weathers,
-    get_hourly_url,
-    get_hourly_url_local,
-    get_kk_url,
-    get_kk_url_local,
-    map_weather_state,
-)
+from .coordinator import TOWN_TUNE_DURATION, ACTunesCoordinator
+from .helpers import get_config as _get_config
+from .music_data import get_available_weathers, map_weather_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,9 +53,12 @@ SERVICE_PLAY_TOWN_TUNE = "play_town_tune"
 SERVICE_SET_TOWN_TUNE = "set_town_tune"
 SERVICE_STOP = "stop"
 
+# Services accept the standard Home Assistant target selector, so a call can
+# name an entity, a device or an area. The legacy `entity_id` field keeps
+# working because targets are merged into the call data.
 PLAY_HOURLY_SCHEMA = vol.Schema(
     {
-        vol.Required("entity_id"): cv.entity_id,
+        **cv.TARGET_SERVICE_FIELDS,
         vol.Optional("game"): cv.string,
         vol.Optional("weather"): cv.string,
     }
@@ -70,7 +66,7 @@ PLAY_HOURLY_SCHEMA = vol.Schema(
 
 PLAY_KK_SCHEMA = vol.Schema(
     {
-        vol.Required("entity_id"): cv.entity_id,
+        **cv.TARGET_SERVICE_FIELDS,
         vol.Required("song_name"): cv.string,
         vol.Optional("version", default=KK_LIVE): cv.string,
     }
@@ -84,11 +80,7 @@ SET_TOWN_TUNE_SCHEMA = vol.Schema(
     }
 )
 
-STOP_SCHEMA = vol.Schema(
-    {
-        vol.Required("entity_id"): cv.entity_id,
-    }
-)
+STOP_SCHEMA = vol.Schema({**cv.TARGET_SERVICE_FIELDS})
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
@@ -188,149 +180,123 @@ async def _async_update_listener(
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _target_players(hass: HomeAssistant, call: ServiceCall) -> list[str]:
+    """Resolve a service call target to media player entity ids.
+
+    Handles entity, device and area targets alike, which is what lets an
+    automation point at a satellite's device instead of hand-resolving its
+    media player attribute.
+    """
+    selected = service_helper.async_extract_referenced_entity_ids(hass, call)
+    entity_ids = [
+        entity_id
+        for entity_id in (*selected.referenced, *selected.indirectly_referenced)
+        if entity_id.startswith(f"{MEDIA_PLAYER_DOMAIN}.")
+    ]
+
+    if not entity_ids:
+        raise ServiceValidationError(
+            "No media player was targeted. Pick an entity, device or area "
+            "that contains a media player."
+        )
+
+    # Deduplicate while keeping a stable order.
+    return list(dict.fromkeys(entity_ids))
+
+
+def _town_tune_media_id(hass: HomeAssistant) -> str | None:
+    """Return the town tune media source id, if the WAV has been generated."""
+    if not os.path.isfile(hass.config.path("www", "ac_tunes", "town_tune.wav")):
+        _LOGGER.warning("No town tune has been generated yet")
+        return None
+    return player.build_town_tune_media_id()
+
+
 def _register_services(hass: HomeAssistant) -> None:
     """Register integration services."""
 
     async def handle_play_hourly(call: ServiceCall) -> None:
         """Handle the play_hourly service call."""
-        entity_id = call.data["entity_id"]
+        cfg = _get_config(hass)
         now = datetime.now()
 
-        # Get config from first entry if available
-        cfg = _get_config(hass)
-
-        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES) or DEFAULT_GAMES
         game = call.data.get("game") or random.choice(games)  # noqa: S311
+        weather = _resolve_weather(hass, cfg, game, call.data.get("weather"))
 
-        weather = _resolve_weather(
-            hass, cfg, game, call.data.get("weather")
-        )
+        media_id = player.build_hourly_media_id(game, weather, now.hour)
 
-        hour = now.hour
-
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from .music_data import format_hour
-
-            hour_str = format_hour(hour)
-            base = _get_ha_base_url(hass)
-            url = f"{base}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
-        else:
-            url = get_hourly_url(game, weather, hour)
-
-        await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
-
-        await hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": entity_id,
-                "media_content_id": url,
-                "media_content_type": "music",
-            },
-            blocking=True,
-        )
+        for entity_id in _target_players(hass, call):
+            await player.async_set_volume(
+                hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
+            )
+            await player.async_play(hass, entity_id, media_id)
 
     async def handle_play_kk(call: ServiceCall) -> None:
         """Handle the play_kk service call."""
-        entity_id = call.data["entity_id"]
+        cfg = _get_config(hass)
         song_name = call.data["song_name"]
         version = call.data.get("version", KK_LIVE)
 
-        cfg = _get_config(hass)
+        media_id = player.build_kk_media_id(song_name, version)
 
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from urllib.parse import quote
-
-            encoded = quote(f"{song_name}.ogg")
-            base = _get_ha_base_url(hass)
-            url = f"{base}/local/ac_tunes/kk/{version}/{encoded}"
-        else:
-            url = get_kk_url(song_name, version)
-
-        await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
-
-        await hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": entity_id,
-                "media_content_id": url,
-                "media_content_type": "music",
-            },
-            blocking=True,
-        )
+        for entity_id in _target_players(hass, call):
+            await player.async_set_volume(
+                hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
+            )
+            await player.async_play(hass, entity_id, media_id)
 
     async def handle_play_town_tune(call: ServiceCall) -> None:
         """Play the town tune, then start the current hour's track."""
-        import asyncio
-
-        entity_id = call.data["entity_id"]
         cfg = _get_config(hass)
-
-        # Play the town tune WAV
-        try:
-            base = get_url(hass)
-        except Exception:  # noqa: BLE001
-            base = "http://homeassistant.local:8123"
-        town_tune_url = f"{base}/local/ac_tunes/town_tune.wav"
-
-        # Use the dedicated town tune player if configured (e.g. underlying
-        # Apple TV when main player is Music Assistant)
-        tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
-        # Use a separate player for the tune when configured (MA workaround)
-        uses_separate_player = tune_player != entity_id
-
-        try:
-            await _set_volume(hass, tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME))
-            await hass.services.async_call(
-                "media_player",
-                "play_media",
-                {
-                    "entity_id": tune_player,
-                    "media_content_id": town_tune_url,
-                    "media_content_type": "music",
-                },
-                blocking=not uses_separate_player,
-            )
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("Failed to play town tune")
-
-        # Wait for town tune to finish (~5.2s + buffer)
-        await asyncio.sleep(7.0)
-
-        # Now play the current hour's track on the main player
         now = datetime.now()
-        games = cfg.get(CONF_GAMES, DEFAULT_GAMES)
+
+        games = cfg.get(CONF_GAMES, DEFAULT_GAMES) or DEFAULT_GAMES
         game = call.data.get("game") or random.choice(games)  # noqa: S311
+        weather = _resolve_weather(hass, cfg, game, call.data.get("weather"))
 
-        weather = _resolve_weather(
-            hass, cfg, game, call.data.get("weather")
-        )
+        hourly_id = player.build_hourly_media_id(game, weather, now.hour)
+        tune_id = _town_tune_media_id(hass)
 
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from .music_data import format_hour
+        for entity_id in _target_players(hass, call):
+            # A separate tune player can be configured to route the chime to
+            # the underlying device when the main player can't announce.
+            tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
+            announced = None
 
-            hour_str = format_hour(now.hour)
-            base = _get_ha_base_url(hass)
-            url = f"{base}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
-        else:
-            url = get_hourly_url(game, weather, now.hour)
+            if tune_id:
+                try:
+                    await player.async_set_volume(
+                        hass, tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME)
+                    )
+                    announced = await player.async_play(
+                        hass, tune_player, tune_id, announce=True
+                    )
+                    if tune_player != entity_id:
+                        # Playing elsewhere never interrupts the music.
+                        announced = True
+                except HomeAssistantError:
+                    _LOGGER.warning(
+                        "Failed to play town tune on %s", tune_player, exc_info=True
+                    )
 
-        _LOGGER.info("Playing hourly track: %s", url)
-        try:
-            await _set_volume(hass, entity_id, cfg.get(CONF_MUSIC_VOLUME))
-            await hass.services.async_call(
-                "media_player",
-                "play_media",
-                {
-                    "entity_id": entity_id,
-                    "media_content_id": url,
-                    "media_content_type": "music",
-                },
-                blocking=True,
-            )
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("Failed to play hourly track after town tune")
+            if announced is False:
+                # The player can't duck and resume, so wait the tune out
+                # before replacing what it's playing.
+                await asyncio.sleep(TOWN_TUNE_DURATION)
+
+            _LOGGER.info("Playing %s/%s hour %d on %s", game, weather, now.hour, entity_id)
+            try:
+                await player.async_set_volume(
+                    hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
+                )
+                await player.async_play(hass, entity_id, hourly_id)
+            except HomeAssistantError:
+                _LOGGER.warning(
+                    "Failed to play hourly track after town tune on %s",
+                    entity_id,
+                    exc_info=True,
+                )
 
     async def handle_set_town_tune(call: ServiceCall) -> None:
         """Save a new town tune and regenerate the WAV."""
@@ -354,13 +320,8 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_stop(call: ServiceCall) -> None:
         """Handle the stop service call."""
-        entity_id = call.data["entity_id"]
-        await hass.services.async_call(
-            "media_player",
-            "media_stop",
-            {"entity_id": entity_id},
-            blocking=True,
-        )
+        for entity_id in _target_players(hass, call):
+            await player.async_stop(hass, entity_id)
 
     hass.services.async_register(
         DOMAIN, SERVICE_PLAY_HOURLY, handle_play_hourly, schema=PLAY_HOURLY_SCHEMA
@@ -385,30 +346,6 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
 
-def _get_ha_base_url(hass: HomeAssistant) -> str:
-    """Get the HA base URL for serving local files."""
-    try:
-        return get_url(hass)
-    except Exception:  # noqa: BLE001
-        return "http://homeassistant.local:8123"
-
-
-async def _set_volume(hass: HomeAssistant, entity_id: str, volume_pct: int | None) -> None:
-    """Set volume on a media player if a value is configured."""
-    if volume_pct is None:
-        return
-    volume = max(0.0, min(1.0, volume_pct / 100.0))
-    try:
-        await hass.services.async_call(
-            "media_player",
-            "volume_set",
-            {"entity_id": entity_id, "volume_level": volume},
-            blocking=True,
-        )
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("Could not set volume on %s", entity_id)
-
-
 def _resolve_weather(hass: HomeAssistant, cfg: dict, game: str, override: str | None = None) -> str:
     """Resolve weather mode to an actual weather variant for URL building."""
     if override and override not in (WEATHER_LIVE, WEATHER_RANDOM):
@@ -429,13 +366,3 @@ def _resolve_weather(hass: HomeAssistant, cfg: dict, game: str, override: str | 
     if mode in available:
         return mode
     return available[0]
-
-
-def _get_config(hass: HomeAssistant) -> dict:
-    """Get the merged config from the first config entry."""
-    entries = hass.data.get(DOMAIN, {})
-    for entry_data in entries.values():
-        coordinator = entry_data.get("coordinator")
-        if coordinator:
-            return coordinator.config
-    return {}

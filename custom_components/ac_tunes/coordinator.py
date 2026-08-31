@@ -6,6 +6,10 @@ Behaves like the original AC Music Extension:
   3. At the top of each hour, plays the town tune then transitions
      to the new hour's track.
   4. On Saturday nights (8pm-midnight), plays K.K. Slider instead.
+
+All media player interaction goes through :mod:`.player`, and all tracks
+are addressed with ``media-source://`` identifiers so Home Assistant core
+resolves the URL and MIME type for whichever player is configured.
 """
 from __future__ import annotations
 
@@ -18,26 +22,24 @@ from datetime import datetime
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_IDLE, STATE_OFF, STATE_PAUSED
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
 )
-from homeassistant.helpers.network import get_url
 
+from . import player
 from .const import (
-    AUDIO_LOCAL,
-    CONF_AUDIO_SOURCE,
+    CONF_DURATION_TRACKING,
     CONF_GAMES,
     CONF_KK_SCHEDULE,
     CONF_KK_SHUFFLE_NO_REPEATS,
     CONF_KK_VERSION,
-    CONF_LOCAL_PATH,
     CONF_MEDIA_PLAYER,
+    CONF_MUSIC_VOLUME,
     CONF_SHUFFLES_PER_HOUR,
     CONF_SONG_DELAY,
     CONF_TOWN_TUNE_PLAYER,
-    CONF_DURATION_TRACKING,
-    CONF_MUSIC_VOLUME,
     CONF_TOWN_TUNE_VOLUME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
@@ -47,22 +49,16 @@ from .const import (
     DEFAULT_SHUFFLES_PER_HOUR,
     DEFAULT_SONG_DELAY,
     DEFAULT_WEATHER_MODE,
-    DOMAIN,
-    GAMES,
     KK_ALWAYS,
-    KK_LIVE,
     KK_SATURDAYS,
     WEATHER_LIVE,
     WEATHER_RANDOM,
     WEATHER_SUNNY,
 )
+from .helpers import duration_key_hourly, duration_key_kk
 from .music_data import (
     ALL_KK_SONGS,
     get_available_weathers,
-    get_hourly_url,
-    get_hourly_url_local,
-    get_kk_url,
-    get_kk_url_local,
     get_random_kk_song,
     map_weather_state,
 )
@@ -75,6 +71,8 @@ _LOGGER = logging.getLogger(__name__)
 RELOOP_DELAY = 2.0
 
 # How long the town tune plays before we start the hourly track (seconds).
+# Only used when the player cannot announce, since an announcement blocks
+# until it has finished on its own.
 TOWN_TUNE_DURATION = 6.0
 
 # Extra buffer before re-triggering to avoid cutting off the end (seconds).
@@ -90,8 +88,10 @@ class ACTunesCoordinator:
         self.entry = entry
         self.enabled = False
 
-        # Currently playing URL so we know what to re-loop
-        self._current_url: str | None = None
+        # Currently playing media source id so we know what to re-loop
+        self._current_media_id: str | None = None
+        # TRACK_DURATIONS key for the current track
+        self._current_duration_key: str | None = None
         # Flag to suppress re-loop when we intentionally stop
         self._intentional_stop = False
         # Flag to suppress re-loop during hour transition
@@ -112,6 +112,16 @@ class ACTunesCoordinator:
         """Return merged config (entry data + options)."""
         return {**self.entry.data, **self.entry.options}
 
+    @property
+    def current_game(self) -> str | None:
+        """Return the game currently playing, if any."""
+        return self._current_game
+
+    @property
+    def current_weather(self) -> str | None:
+        """Return the weather variant currently playing, if any."""
+        return self._current_weather
+
     def register_state_listener(self, listener) -> None:
         """Register a callback to be invoked when playback state changes."""
         self._state_listeners.append(listener)
@@ -126,7 +136,15 @@ class ACTunesCoordinator:
         """Start continuous playback."""
         if self.enabled:
             return
+
+        entity_id = self.config.get(CONF_MEDIA_PLAYER)
+
+        # Validate up front so a missing or renamed player raises instead of
+        # leaving a switch that reads "on" while playing nothing.
+        player.resolve_target(self.hass, entity_id)
+
         self.enabled = True
+        self._intentional_stop = False
 
         # Listen for hour changes
         self._unsub_hourly = async_track_time_change(
@@ -134,40 +152,35 @@ class ACTunesCoordinator:
         )
 
         # Watch the media player state for looping
-        entity_id = self.config.get(CONF_MEDIA_PLAYER)
-        if entity_id:
-            self._unsub_state = async_track_state_change_event(
-                self.hass, [entity_id], self._on_player_state_change
-            )
+        self._unsub_state = async_track_state_change_event(
+            self.hass, [entity_id], self._on_player_state_change
+        )
 
         # Immediately play the current hour's track
-        await self._play_current_hour()
+        try:
+            await self._play_current_hour()
+        except Exception:
+            # Don't leave the coordinator half-started with listeners
+            # registered and the switch reporting on.
+            self._teardown()
+            self.enabled = False
+            self._notify_state_listeners()
+            raise
 
-        _LOGGER.info("AC Tunes continuous playback started")
+        _LOGGER.info("AC Tunes continuous playback started on %s", entity_id)
 
-    async def async_stop(self) -> None:
-        """Stop continuous playback and stop the media player."""
-        self.enabled = False
-        self._intentional_stop = True
-        self._current_url = None
-        self._current_game = None
-        self._current_weather = None
-        self._notify_state_listeners()
-
-        # Cancel pending re-loop
+    def _teardown(self) -> None:
+        """Cancel pending work and unsubscribe listeners."""
         if self._reloop_task and not self._reloop_task.done():
             self._reloop_task.cancel()
-            self._reloop_task = None
+        self._reloop_task = None
 
-        # Cancel duration timer
         if self._duration_timer_task and not self._duration_timer_task.done():
             self._duration_timer_task.cancel()
-            self._duration_timer_task = None
+        self._duration_timer_task = None
 
-        # Cancel shuffle timers
         self._cancel_shuffle_timers()
 
-        # Unsubscribe listeners
         if self._unsub_hourly:
             self._unsub_hourly()
             self._unsub_hourly = None
@@ -175,18 +188,19 @@ class ACTunesCoordinator:
             self._unsub_state()
             self._unsub_state = None
 
-        # Stop the media player
-        entity_id = self.config.get(CONF_MEDIA_PLAYER)
-        if entity_id:
-            try:
-                await self.hass.services.async_call(
-                    "media_player",
-                    "media_stop",
-                    {"entity_id": entity_id},
-                    blocking=True,
-                )
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("Could not stop media player on disable")
+    async def async_stop(self) -> None:
+        """Stop continuous playback and stop the media player."""
+        self.enabled = False
+        self._intentional_stop = True
+        self._current_media_id = None
+        self._current_duration_key = None
+        self._current_game = None
+        self._current_weather = None
+        self._notify_state_listeners()
+
+        self._teardown()
+
+        await player.async_stop(self.hass, self.config.get(CONF_MEDIA_PLAYER))
 
         _LOGGER.info("AC Tunes continuous playback stopped")
 
@@ -201,8 +215,7 @@ class ACTunesCoordinator:
 
     async def _transition_to_new_hour(self, now: datetime) -> None:
         """Play the town tune, then start the new hour's track."""
-        cfg = self.config
-        entity_id = cfg.get(CONF_MEDIA_PLAYER)
+        entity_id = self.config.get(CONF_MEDIA_PLAYER)
         if not entity_id:
             return
 
@@ -214,28 +227,36 @@ class ACTunesCoordinator:
             self._duration_timer_task = None
         self._cancel_shuffle_timers()
 
-        # Play town tune
-        town_tune_url = self._get_town_tune_url()
-        if town_tune_url:
-            _LOGGER.info("Playing town tune before hour transition")
-            try:
-                tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
-                await self._set_volume(tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME))
-                await self._play_town_tune(entity_id, town_tune_url)
-                # Wait for the town tune to finish
-                await asyncio.sleep(TOWN_TUNE_DURATION)
-            except Exception:  # noqa: BLE001
-                _LOGGER.warning("Failed to play town tune, skipping")
-
-        self._transitioning = False
-
-        # Now play the new hour's track (retry once if MA is still settling)
         try:
-            await self._play_current_hour()
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("First attempt to play hourly track failed, retrying")
-            await asyncio.sleep(2.0)
-            await self._play_current_hour()
+            try:
+                announced = await self._play_town_tune(entity_id)
+                if announced is not None and not announced:
+                    # The player can't duck and resume on its own, so wait
+                    # out the tune before replacing what it's playing.
+                    await asyncio.sleep(TOWN_TUNE_DURATION)
+            except HomeAssistantError:
+                _LOGGER.warning("Failed to play town tune, skipping", exc_info=True)
+
+            # Now play the new hour's track (retry once if MA is still settling)
+            try:
+                await self._play_current_hour()
+            except HomeAssistantError:
+                _LOGGER.warning(
+                    "First attempt to play hourly track failed, retrying",
+                    exc_info=True,
+                )
+                await asyncio.sleep(2.0)
+                try:
+                    await self._play_current_hour()
+                except HomeAssistantError:
+                    _LOGGER.error(
+                        "Could not play the hourly track after the town tune",
+                        exc_info=True,
+                    )
+        finally:
+            # Cleared only once the new track is going, so the town tune
+            # ending can't schedule a re-loop of the previous hour's track.
+            self._transitioning = False
 
     # ── Playback ───────────────────────────────────────────────────
 
@@ -243,9 +264,6 @@ class ACTunesCoordinator:
         """Play the appropriate track for the current hour."""
         cfg = self.config
         entity_id = cfg.get(CONF_MEDIA_PLAYER)
-        if not entity_id:
-            _LOGGER.warning("No media player configured")
-            return
 
         now = datetime.now()
 
@@ -263,24 +281,23 @@ class ACTunesCoordinator:
         # Resolve weather
         weather = self._resolve_weather(cfg, game)
 
-        # Build URL
-        url = self._build_hourly_url(cfg, game, weather, now.hour)
+        media_id = player.build_hourly_media_id(game, weather, now.hour)
 
         self._intentional_stop = False
-        self._current_url = url
+        self._current_media_id = media_id
+        self._current_duration_key = duration_key_hourly(game, weather, now.hour)
         self._current_game = game
         self._current_weather = weather
         self._notify_state_listeners()
 
-        await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
+        await player.async_set_volume(
+            self.hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
+        )
 
         _LOGGER.info(
             "Playing %s/%s hour %d on %s", game, weather, now.hour, entity_id
         )
-        await self._call_play_media(entity_id, url)
-
-        # Try to set repeat mode for players that support it
-        await self._try_set_repeat(entity_id)
+        await self._play(entity_id, media_id)
 
         # Schedule shuffles for this hour
         self._schedule_shuffles(now)
@@ -290,21 +307,21 @@ class ACTunesCoordinator:
         song = self._pick_kk_song(cfg)
         version = cfg.get(CONF_KK_VERSION, DEFAULT_KK_VERSION)
 
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from urllib.parse import quote
-
-            encoded = quote(f"{song}.ogg")
-            url = f"{self._get_ha_base_url()}/local/ac_tunes/kk/{version}/{encoded}"
-        else:
-            url = get_kk_url(song, version)
+        media_id = player.build_kk_media_id(song, version)
 
         self._intentional_stop = False
-        self._current_url = url
+        self._current_media_id = media_id
+        self._current_duration_key = duration_key_kk(song, version)
+        self._current_game = None
+        self._current_weather = None
+        self._notify_state_listeners()
 
-        await self._set_volume(entity_id, cfg.get(CONF_MUSIC_VOLUME))
+        await player.async_set_volume(
+            self.hass, entity_id, cfg.get(CONF_MUSIC_VOLUME)
+        )
 
         _LOGGER.info("Playing K.K. Slider: %s (%s) on %s", song, version, entity_id)
-        await self._call_play_media(entity_id, url)
+        await self._play(entity_id, media_id)
 
         # Schedule K.K. shuffles for this hour
         self._schedule_kk_shuffles(datetime.now())
@@ -339,17 +356,17 @@ class ACTunesCoordinator:
             return
 
         _LOGGER.debug(
-            "Player state change: %s -> %s (url=%s)",
+            "Player state change: %s -> %s (media_id=%s)",
             old_state.state,
             new_state.state,
-            self._current_url,
+            self._current_media_id,
         )
 
         # If the player went from playing to idle/off/paused, the track ended
         if (
             old_state.state == "playing"
             and new_state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED)
-            and self._current_url
+            and self._current_media_id
         ):
             # Schedule a re-loop with a small delay to avoid rapid cycling
             if self._reloop_task and not self._reloop_task.done():
@@ -363,34 +380,31 @@ class ACTunesCoordinator:
         song_delay = self.config.get(CONF_SONG_DELAY, DEFAULT_SONG_DELAY)
         await asyncio.sleep(RELOOP_DELAY + song_delay)
 
-        if not self.enabled or self._intentional_stop or not self._current_url:
+        if not self.enabled or self._intentional_stop or not self._current_media_id:
             return
 
         entity_id = self.config.get(CONF_MEDIA_PLAYER)
-        if not entity_id:
-            return
 
         # Check the player is still idle (not playing something else)
-        state = self.hass.states.get(entity_id)
+        state = self.hass.states.get(entity_id) if entity_id else None
         if state and state.state in (STATE_IDLE, STATE_OFF, STATE_PAUSED):
-            # Re-check weather; use updated URL if changed, else current
-            new_url = self._refresh_weather_url()
-            url = new_url or self._current_url
+            # Re-check weather; use updated track if changed, else current
+            refreshed = self._refresh_weather_media_id()
+            media_id = refreshed or self._current_media_id
             _LOGGER.debug(
                 "Re-looping track: %s%s",
-                url,
-                " (weather updated)" if new_url else "",
+                media_id,
+                " (weather updated)" if refreshed else "",
             )
-            await self._call_play_media(entity_id, url)
+            try:
+                await self._play(entity_id, media_id)
+            except HomeAssistantError:
+                _LOGGER.warning("Could not re-loop track", exc_info=True)
 
     # ── Duration tracking (timer-based fallback) ────────────────
 
-    def _schedule_duration_timer(self, url: str) -> None:
-        """Schedule a re-trigger after the estimated track duration.
-
-        Uses HTTP HEAD to get file size, then estimates duration from
-        OGG bitrate. Falls back to state-based looping if HEAD fails.
-        """
+    def _schedule_duration_timer(self, media_id: str, duration_key: str | None) -> None:
+        """Schedule a re-trigger after the known track duration."""
         if not self.config.get(CONF_DURATION_TRACKING):
             return
 
@@ -399,20 +413,23 @@ class ACTunesCoordinator:
             self._duration_timer_task.cancel()
 
         self._duration_timer_task = self.hass.async_create_task(
-            self._duration_timer(url)
+            self._duration_timer(media_id, duration_key)
         )
 
-    async def _duration_timer(self, url: str) -> None:
+    async def _duration_timer(self, media_id: str, duration_key: str | None) -> None:
         """Look up duration, wait, then re-trigger."""
-        duration = self._get_track_duration(url)
+        duration = TRACK_DURATIONS.get(duration_key) if duration_key else None
         if duration is None:
-            _LOGGER.warning("Duration tracking: could not estimate duration for %s", url)
+            _LOGGER.warning(
+                "Duration tracking: no known duration for %s", duration_key
+            )
             return
 
         song_delay = self.config.get(CONF_SONG_DELAY, DEFAULT_SONG_DELAY)
         wait_time = duration + DURATION_BUFFER + song_delay
         _LOGGER.info(
-            "Duration tracking: estimated %.0fs, will re-trigger in %.0fs",
+            "Duration tracking: %s is %.0fs, will re-trigger in %.0fs",
+            duration_key,
             duration,
             wait_time,
         )
@@ -421,7 +438,7 @@ class ACTunesCoordinator:
 
         if not self.enabled or self._intentional_stop or self._transitioning:
             return
-        if self._current_url != url:
+        if self._current_media_id != media_id:
             return
 
         entity_id = self.config.get(CONF_MEDIA_PLAYER)
@@ -429,51 +446,18 @@ class ACTunesCoordinator:
             return
 
         # Re-check weather before re-triggering
-        new_url = self._refresh_weather_url()
-        play_url = new_url or url
+        refreshed = self._refresh_weather_media_id()
+        play_id = refreshed or media_id
 
         _LOGGER.info(
             "Duration tracking: timer fired, re-looping %s%s",
-            play_url,
-            " (weather updated)" if new_url else "",
+            play_id,
+            " (weather updated)" if refreshed else "",
         )
-        await self._call_play_media(entity_id, play_url)
-
-        # Schedule the next timer for the (possibly updated) track
-        self._schedule_duration_timer(play_url)
-
-    def _get_track_duration(self, url: str) -> float | None:
-        """Look up track duration from the hardcoded duration table.
-
-        Extracts the lookup key from the URL/path by matching the
-        pattern: {game}/{weather}/{hour} or kk/{version}/{song}
-        """
-        # Strip .ogg extension and find the key portion
-        path = url.rsplit(".ogg", 1)[0]
-
-        # Try matching hourly: .../game/weather/hour
-        # Try matching KK: .../kk/version/song
-        for prefix in ("kk/live/", "kk/aircheck/"):
-            idx = path.find(prefix)
-            if idx != -1:
-                key = path[idx:].replace("%20", " ").replace("%27", "'")
-                dur = TRACK_DURATIONS.get(key)
-                if dur:
-                    _LOGGER.debug("Duration lookup: %s = %.1fs", key, dur)
-                    return dur
-
-        # Hourly tracks: find game/weather/hour pattern
-        for game in ("animal-crossing", "wild-world", "new-leaf", "new-horizons"):
-            idx = path.find(f"{game}/")
-            if idx != -1:
-                key = path[idx:]
-                dur = TRACK_DURATIONS.get(key)
-                if dur:
-                    _LOGGER.debug("Duration lookup: %s = %.1fs", key, dur)
-                    return dur
-
-        _LOGGER.warning("No duration found for: %s", url)
-        return None
+        try:
+            await self._play(entity_id, play_id)
+        except HomeAssistantError:
+            _LOGGER.warning("Could not re-loop track on timer", exc_info=True)
 
     # ── Shuffle scheduling ──────────────────────────────────────────
 
@@ -544,9 +528,10 @@ class ACTunesCoordinator:
             game = random.choice(games)  # noqa: S311
 
         weather = self._resolve_weather(cfg, game)
-        url = self._build_hourly_url(cfg, game, weather, now.hour)
+        media_id = player.build_hourly_media_id(game, weather, now.hour)
 
-        self._current_url = url
+        self._current_media_id = media_id
+        self._current_duration_key = duration_key_hourly(game, weather, now.hour)
         self._current_game = game
         self._current_weather = weather
         self._notify_state_listeners()
@@ -559,7 +544,10 @@ class ACTunesCoordinator:
         _LOGGER.info(
             "Shuffle: switching to %s/%s hour %d", game, weather, now.hour
         )
-        await self._call_play_media(entity_id, url)
+        try:
+            await self._play(entity_id, media_id)
+        except HomeAssistantError:
+            _LOGGER.warning("Shuffle playback failed", exc_info=True)
 
     def _cancel_shuffle_timers(self) -> None:
         """Cancel all pending shuffle tasks."""
@@ -618,15 +606,9 @@ class ACTunesCoordinator:
         song = self._pick_kk_song(cfg)
         version = cfg.get(CONF_KK_VERSION, DEFAULT_KK_VERSION)
 
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from urllib.parse import quote
-
-            encoded = quote(f"{song}.ogg")
-            url = f"{self._get_ha_base_url()}/local/ac_tunes/kk/{version}/{encoded}"
-        else:
-            url = get_kk_url(song, version)
-
-        self._current_url = url
+        media_id = player.build_kk_media_id(song, version)
+        self._current_media_id = media_id
+        self._current_duration_key = duration_key_kk(song, version)
 
         # Cancel current duration timer so it doesn't re-trigger the old track
         if self._duration_timer_task and not self._duration_timer_task.done():
@@ -634,61 +616,41 @@ class ACTunesCoordinator:
             self._duration_timer_task = None
 
         _LOGGER.info("K.K. shuffle: switching to %s (%s)", song, version)
-        await self._call_play_media(entity_id, url)
+        try:
+            await self._play(entity_id, media_id)
+        except HomeAssistantError:
+            _LOGGER.warning("K.K. shuffle playback failed", exc_info=True)
 
     # ── Helpers ────────────────────────────────────────────────────
 
-    async def _set_volume(self, entity_id: str, volume_pct: int | None) -> None:
-        """Set volume on the media player if a value is configured."""
-        if volume_pct is None:
-            return
-        volume = max(0.0, min(1.0, volume_pct / 100.0))
-        try:
-            await self.hass.services.async_call(
-                "media_player",
-                "volume_set",
-                {"entity_id": entity_id, "volume_level": volume},
-                blocking=True,
-            )
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("Could not set volume on %s", entity_id)
+    async def _play_town_tune(self, entity_id: str) -> bool | None:
+        """Play the town tune.
 
-    async def _play_town_tune(self, entity_id: str, url: str) -> None:
-        """Play the town tune on the configured player.
-
-        If a separate town_tune_player is configured (e.g. the underlying
-        Apple TV when using Music Assistant), use that instead.
+        Returns True if it was sent as an announcement (the player ducks and
+        resumes on its own), False if it was played as normal media, or None
+        if no town tune has been generated yet.
         """
+        media_id = self._get_town_tune_media_id()
+        if not media_id:
+            return None
+
         cfg = self.config
+        # A separate player can be configured to route the tune to the
+        # underlying device, for setups where the main player can't announce.
         tune_player = cfg.get(CONF_TOWN_TUNE_PLAYER) or entity_id
-        _LOGGER.debug("Playing town tune on %s", tune_player)
-        await self.hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": tune_player,
-                "media_content_id": url,
-                "media_content_type": "music",
-            },
-            blocking=False,
+
+        await player.async_set_volume(
+            self.hass, tune_player, cfg.get(CONF_TOWN_TUNE_VOLUME)
         )
 
-    async def _try_set_repeat(self, entity_id: str) -> None:
-        """Try to set repeat mode to 'one' on the media player."""
-        try:
-            state = self.hass.states.get(entity_id)
-            if state and "repeat" in (
-                state.attributes.get("supported_features_names", [])
-            ):
-                await self.hass.services.async_call(
-                    "media_player",
-                    "repeat_set",
-                    {"entity_id": entity_id, "repeat": "one"},
-                    blocking=False,
-                )
-        except Exception:  # noqa: BLE001
-            # Not all players support repeat — that's fine, we loop via state
-            pass
+        _LOGGER.info("Playing town tune on %s", tune_player)
+        announced = await player.async_play(
+            self.hass, tune_player, media_id, announce=True
+        )
+
+        # Playing the tune on a different device never interrupts the music,
+        # so there's nothing to wait for either way.
+        return True if tune_player != entity_id else announced
 
     def _should_play_kk(self, cfg: dict, now: datetime) -> bool:
         """Check if K.K. Slider should play based on schedule."""
@@ -721,19 +683,8 @@ class ACTunesCoordinator:
             return mode
         return available[0]
 
-    def _build_hourly_url(
-        self, cfg: dict, game: str, weather: str, hour: int
-    ) -> str:
-        """Build the URL for the hourly track."""
-        if cfg.get(CONF_AUDIO_SOURCE) == AUDIO_LOCAL:
-            from .music_data import format_hour
-
-            hour_str = format_hour(hour)
-            return f"{self._get_ha_base_url()}/local/ac_tunes/{game}/{weather}/{hour_str}.ogg"
-        return get_hourly_url(game, weather, hour)
-
-    def _refresh_weather_url(self) -> str | None:
-        """Re-check weather and return updated URL if weather changed.
+    def _refresh_weather_media_id(self) -> str | None:
+        """Re-check weather and return an updated media id if it changed.
 
         Keeps the current game (no re-randomization), only refreshes the
         weather variant from the configured source.  Returns None when
@@ -749,10 +700,11 @@ class ACTunesCoordinator:
             return None  # No change
 
         now = datetime.now()
-        url = self._build_hourly_url(cfg, game, weather, now.hour)
+        media_id = player.build_hourly_media_id(game, weather, now.hour)
 
         self._current_weather = weather
-        self._current_url = url
+        self._current_media_id = media_id
+        self._current_duration_key = duration_key_hourly(game, weather, now.hour)
 
         _LOGGER.info(
             "Weather changed to %s, switching track for %s hour %d",
@@ -761,33 +713,16 @@ class ACTunesCoordinator:
             now.hour,
         )
         self._notify_state_listeners()
-        return url
+        return media_id
 
-    def _get_ha_base_url(self) -> str:
-        """Get the HA base URL for serving local files."""
-        try:
-            return get_url(self.hass)
-        except Exception:  # noqa: BLE001
-            return "http://homeassistant.local:8123"
-
-    def _get_town_tune_url(self) -> str | None:
-        """Get the full URL for the town tune WAV file."""
+    def _get_town_tune_media_id(self) -> str | None:
+        """Return the media source id for the town tune, if it exists."""
         wav_path = self.hass.config.path("www", "ac_tunes", "town_tune.wav")
         if not os.path.isfile(wav_path):
             return None
-        return f"{self._get_ha_base_url()}/local/ac_tunes/town_tune.wav"
+        return player.build_town_tune_media_id()
 
-    async def _call_play_media(self, entity_id: str, url: str) -> None:
-        """Call the media_player.play_media service."""
-        await self.hass.services.async_call(
-            "media_player",
-            "play_media",
-            {
-                "entity_id": entity_id,
-                "media_content_id": url,
-                "media_content_type": "music",
-            },
-            blocking=True,
-        )
-        # Start duration timer for re-looping if enabled
-        self._schedule_duration_timer(url)
+    async def _play(self, entity_id: str | None, media_id: str) -> None:
+        """Play a track and arm the duration timer for it."""
+        await player.async_play(self.hass, entity_id, media_id)
+        self._schedule_duration_timer(media_id, self._current_duration_key)

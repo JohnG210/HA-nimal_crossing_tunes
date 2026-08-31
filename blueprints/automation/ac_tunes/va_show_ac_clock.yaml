@@ -75,7 +75,7 @@ actions:
     value_template: "{{ not is_state(player, 'playing') }}"
 
   - action: ac_tunes.play_town_tune
-    data:
+    target:
       entity_id: "{{ player }}"
 
   - set_conversation_response: ""
