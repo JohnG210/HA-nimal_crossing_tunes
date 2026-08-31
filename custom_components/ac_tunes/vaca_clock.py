@@ -1,6 +1,7 @@
 """Optional View Assist navigation after AC Tunes playback."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -16,6 +17,10 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# VACA may route to its music page shortly after media_player.play_media
+# returns. Delay navigation so the AC clock is the final display route.
+VACA_MEDIA_ROUTE_DELAY = 1.0
 
 
 def _is_view_assist_display(attributes: dict[str, Any]) -> bool:
@@ -53,6 +58,7 @@ async def async_show_clock_after_playback(
         return
 
     path = config.get(CONF_VACA_CLOCK_PATH) or DEFAULT_VACA_CLOCK_PATH
+    await asyncio.sleep(VACA_MEDIA_ROUTE_DELAY)
     try:
         await hass.services.async_call(
             "view_assist",
