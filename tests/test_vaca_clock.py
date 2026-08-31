@@ -11,6 +11,7 @@ sys.modules["custom_components"] = pkg
 
 from homeassistant.core import State
 
+import custom_components.ac_tunes.vaca_clock as vaca_clock
 from custom_components.ac_tunes.vaca_clock import async_show_clock_after_playback
 
 MAIN_PLAYER = "media_player.desk_echo_show_mp_va"
@@ -114,6 +115,28 @@ def test_navigation_failure_does_not_escape():
     ]
 
 
+def test_navigation_waits_for_vaca_media_route():
+    async def run():
+        sleeps = []
+        original_sleep = vaca_clock.asyncio.sleep
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        vaca_clock.asyncio.sleep = fake_sleep
+        try:
+            hass = FakeHass({DISPLAY: vaca_state()})
+            await async_show_clock_after_playback(hass, config(), MAIN_PLAYER)
+        finally:
+            vaca_clock.asyncio.sleep = original_sleep
+        assert sleeps == [vaca_clock.VACA_MEDIA_ROUTE_DELAY]
+        assert hass.services.calls == [
+            ("view_assist", "navigate", {"device": DISPLAY, "path": PATH}, True)
+        ]
+
+    asyncio.run(run())
+
+
 for name, fn in [
     ("disabled feature does nothing", test_disabled_is_noop),
     ("other media player does nothing", test_other_player_is_noop),
@@ -121,7 +144,8 @@ for name, fn in [
     ("missing View Assist service does nothing", test_missing_service_is_noop),
     ("valid pair navigates exactly once", test_valid_pair_navigates_once),
     ("navigation failure does not break playback", test_navigation_failure_does_not_escape),
+    ("navigation waits for VACA media routing", test_navigation_waits_for_vaca_media_route),
 ]:
     check(name, fn)
 
-print("\n6/6 passed")
+print("\n7/7 passed")
