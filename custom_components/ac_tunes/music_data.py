@@ -194,7 +194,7 @@ def get_hourly_url_local(
     hour: int,
     local_path: str,
 ) -> str:
-    """Build a local file path for an hourly music track."""
+    """Build a local URL for an hourly music track."""
     hour_str = format_hour(hour)
     return f"{local_path}/{game}/{weather}/{hour_str}.ogg"
 
@@ -219,8 +219,13 @@ def get_kk_url_local(
     version: str = KK_LIVE,
     local_path: str = "",
 ) -> str:
-    """Build a local file path for a K.K. Slider song."""
-    return f"{local_path}/kk/{version}/{song_name}.ogg"
+    """Build a local URL for a K.K. Slider song.
+
+    The song name is URL-encoded to handle spaces and special characters,
+    matching the remote helper.
+    """
+    encoded = quote(f"{song_name}.ogg")
+    return f"{local_path}/kk/{version}/{encoded}"
 
 
 def get_available_weathers(game: str) -> list[str]:

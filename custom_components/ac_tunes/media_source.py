@@ -1,5 +1,13 @@
-"""Media source platform for Animal Crossing Tunes."""
+"""Media source platform for Animal Crossing Tunes.
+
+This is the one place that turns a track into a playable URL. The
+coordinator and the services address music through ``media-source://``
+identifiers so that Home Assistant core resolves the URL, applies the
+right MIME type and signs local paths on their behalf.
+"""
 from __future__ import annotations
+
+from urllib.parse import quote, unquote
 
 from homeassistant.components.media_player import MediaClass, MediaType
 from homeassistant.components.media_source import (
@@ -8,6 +16,8 @@ from homeassistant.components.media_source import (
     MediaSourceItem,
     PlayMedia,
     Unresolvable,
+    async_resolve_media,
+    is_media_source_id,
 )
 from homeassistant.core import HomeAssistant
 
@@ -16,14 +26,13 @@ from .const import (
     GAMES,
     KK_AIRCHECK,
     KK_LIVE,
+    TOWN_TUNE_URL_PATH,
     WEATHERS,
 )
+from .helpers import get_config, resolve_hourly_url, resolve_kk_url
 from .music_data import (
     ALL_KK_SONGS,
-    KK_SONGS,
     format_hour_display,
-    get_hourly_url,
-    get_kk_url,
     kk_display_name,
 )
 
@@ -49,24 +58,41 @@ class ACTunesMediaSource(MediaSource):
         if not identifier:
             raise Unresolvable("No identifier provided.")
 
+        # Town tune: town_tune
+        if identifier == "town_tune":
+            return PlayMedia(TOWN_TUNE_URL_PATH, "audio/x-wav")
+
+        cfg = get_config(self.hass)
         parts = identifier.split("/")
 
         # Hourly: hourly/{game}/{weather}/{hour}
         if parts[0] == "hourly" and len(parts) == 4:
             game = parts[1]
             weather = parts[2]
-            hour = int(parts[3])
-            url = get_hourly_url(game, weather, hour)
-            return PlayMedia(url, "audio/ogg")
+            try:
+                hour = int(parts[3])
+            except ValueError as err:
+                raise Unresolvable(f"Invalid hour: {parts[3]}") from err
+            return await self._play_media(resolve_hourly_url(cfg, game, weather, hour))
 
         # K.K.: kk/{version}/{song_name}
         if parts[0] == "kk" and len(parts) == 3:
             version = parts[1]
-            song_name = parts[2]
-            url = get_kk_url(song_name, version)
-            return PlayMedia(url, "audio/ogg")
+            song_name = unquote(parts[2])
+            return await self._play_media(resolve_kk_url(cfg, song_name, version))
 
         raise Unresolvable(f"Unknown media identifier: {identifier}")
+
+    async def _play_media(self, url: str) -> PlayMedia:
+        """Wrap a resolved URL, delegating media-directory files to core.
+
+        Files under the media directory are only addressable through Home
+        Assistant's own media source, so those are handed back to core to
+        resolve and sign.
+        """
+        if is_media_source_id(url):
+            return await async_resolve_media(self.hass, url, None)
+        return PlayMedia(url, "audio/ogg")
 
     async def async_browse_media(
         self, item: MediaSourceItem
@@ -252,10 +278,13 @@ class ACTunesMediaSource(MediaSource):
     def _build_kk_songs(self, version: str) -> BrowseMediaSource:
         """Build the K.K. Slider song listing for a version."""
         version_label = "Live" if version == KK_LIVE else "Aircheck"
+        # Media source identifiers may not contain whitespace, and K.K.
+        # titles are full of it, so the title is percent-encoded here and
+        # decoded again in async_resolve_media.
         children = [
             BrowseMediaSource(
                 domain=DOMAIN,
-                identifier=f"kk/{version}/{song}",
+                identifier=f"kk/{version}/{quote(song, safe='')}",
                 media_class=MediaClass.MUSIC,
                 media_content_type=MediaType.MUSIC,
                 title=kk_display_name(song),

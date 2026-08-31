@@ -1,14 +1,10 @@
 play_hourly:
   name: Play Hourly Music
   description: Play the current hour's Animal Crossing music on a media player.
+  target:
+    entity:
+      domain: media_player
   fields:
-    entity_id:
-      name: Media Player
-      description: The media player entity to play on.
-      required: true
-      selector:
-        entity:
-          domain: media_player
     game:
       name: Game
       description: Which game's soundtrack to play. Uses config default if omitted.
@@ -41,14 +37,10 @@ play_hourly:
 play_kk:
   name: Play K.K. Slider Song
   description: Play a K.K. Slider song on a media player.
+  target:
+    entity:
+      domain: media_player
   fields:
-    entity_id:
-      name: Media Player
-      description: The media player entity to play on.
-      required: true
-      selector:
-        entity:
-          domain: media_player
     song_name:
       name: Song Name
       description: The name of the K.K. Slider song.
@@ -71,14 +63,10 @@ play_kk:
 play_town_tune:
   name: Play Town Tune
   description: Play the town tune chime, then start the current hour's track.
+  target:
+    entity:
+      domain: media_player
   fields:
-    entity_id:
-      name: Media Player
-      description: The media player entity to play on.
-      required: true
-      selector:
-        entity:
-          domain: media_player
     game:
       name: Game
       description: Which game's soundtrack to play after the town tune. Uses config default if omitted.
@@ -123,11 +111,6 @@ set_town_tune:
 stop:
   name: Stop Playback
   description: Stop playback on a media player.
-  fields:
-    entity_id:
-      name: Media Player
-      description: The media player entity to stop.
-      required: true
-      selector:
-        entity:
-          domain: media_player
+  target:
+    entity:
+      domain: media_player

@@ -33,6 +33,7 @@ from .const import (
     DEFAULT_GAMES,
     DEFAULT_KK_SCHEDULE,
     DEFAULT_KK_VERSION,
+    DEFAULT_LOCAL_PATH,
     DEFAULT_SHUFFLES_PER_HOUR,
     DEFAULT_SONG_DELAY,
     DEFAULT_WEATHER_MODE,
@@ -134,7 +135,9 @@ def _build_schema(
             ),
             vol.Optional(
                 CONF_LOCAL_PATH,
-                description={"suggested_value": d.get(CONF_LOCAL_PATH, "")},
+                description={
+                    "suggested_value": d.get(CONF_LOCAL_PATH, DEFAULT_LOCAL_PATH)
+                },
             ): selector.TextSelector(),
             vol.Required(
                 CONF_KK_SCHEDULE,
