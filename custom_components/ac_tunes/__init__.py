@@ -19,6 +19,21 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import service as service_helper
 
+# Home Assistant moved target resolution from `helpers.service` to
+# `helpers.target` and dropped the old name in 2026.8. Support both so the
+# integration keeps working across the HA versions we claim to support.
+try:
+    from homeassistant.helpers import target as _target_helper
+except ImportError:  # pragma: no cover - Home Assistant before the move
+    _target_helper = None
+
+_EXTRACT_REFERENCED = getattr(
+    _target_helper, "async_extract_referenced_entity_ids", None
+)
+_TARGET_SELECTION = getattr(_target_helper, "TargetSelection", None) or getattr(
+    _target_helper, "TargetSelectorData", None
+)
+
 from . import player
 from .const import (
     CONF_GAME,
@@ -187,7 +202,11 @@ def _target_players(hass: HomeAssistant, call: ServiceCall) -> list[str]:
     automation point at a satellite's device instead of hand-resolving its
     media player attribute.
     """
-    selected = service_helper.async_extract_referenced_entity_ids(hass, call)
+    if _EXTRACT_REFERENCED is not None and _TARGET_SELECTION is not None:
+        selected = _EXTRACT_REFERENCED(hass, _TARGET_SELECTION(call.data))
+    else:
+        selected = service_helper.async_extract_referenced_entity_ids(hass, call)
+
     entity_ids = [
         entity_id
         for entity_id in (*selected.referenced, *selected.indirectly_referenced)
