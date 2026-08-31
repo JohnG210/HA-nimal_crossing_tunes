@@ -23,10 +23,13 @@ from .const import (
     CONF_DURATION_TRACKING,
     CONF_MUSIC_VOLUME,
     CONF_SHUFFLES_PER_HOUR,
+    CONF_SHOW_VACA_CLOCK,
     CONF_SONG_DELAY,
     CONF_TOWN_TUNE,
     CONF_TOWN_TUNE_PLAYER,
     CONF_TOWN_TUNE_VOLUME,
+    CONF_VACA_CLOCK_PATH,
+    CONF_VACA_DISPLAY_ENTITY,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_MODE,
     DEFAULT_AUDIO_SOURCE,
@@ -36,6 +39,7 @@ from .const import (
     DEFAULT_LOCAL_PATH,
     DEFAULT_SHUFFLES_PER_HOUR,
     DEFAULT_SONG_DELAY,
+    DEFAULT_VACA_CLOCK_PATH,
     DEFAULT_WEATHER_MODE,
     DOMAIN,
     GAME_ANIMAL_CROSSING,
@@ -190,6 +194,24 @@ def _build_schema(
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="media_player")
             ),
+            vol.Optional(
+                CONF_SHOW_VACA_CLOCK,
+                default=d.get(CONF_SHOW_VACA_CLOCK, False),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_VACA_DISPLAY_ENTITY,
+                description={"suggested_value": d.get(CONF_VACA_DISPLAY_ENTITY, "")},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(
+                CONF_VACA_CLOCK_PATH,
+                description={
+                    "suggested_value": d.get(
+                        CONF_VACA_CLOCK_PATH, DEFAULT_VACA_CLOCK_PATH
+                    )
+                },
+            ): selector.TextSelector(),
             vol.Optional(
                 CONF_MUSIC_VOLUME,
                 description={"suggested_value": d.get(CONF_MUSIC_VOLUME)},

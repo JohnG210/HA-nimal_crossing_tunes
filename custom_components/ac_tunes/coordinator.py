@@ -63,6 +63,7 @@ from .music_data import (
     map_weather_state,
 )
 from .track_durations import TRACK_DURATIONS
+from .vaca_clock import async_show_clock_after_playback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -723,6 +724,7 @@ class ACTunesCoordinator:
         return player.build_town_tune_media_id()
 
     async def _play(self, entity_id: str | None, media_id: str) -> None:
-        """Play a track and arm the duration timer for it."""
+        """Play a track, show the optional VACA clock, and arm its timer."""
         await player.async_play(self.hass, entity_id, media_id)
+        await async_show_clock_after_playback(self.hass, self.config, entity_id)
         self._schedule_duration_timer(media_id, self._current_duration_key)
