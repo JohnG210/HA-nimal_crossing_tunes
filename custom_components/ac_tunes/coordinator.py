@@ -651,7 +651,19 @@ class ACTunesCoordinator:
 
         # Playing the tune on a different device never interrupts the music,
         # so there's nothing to wait for either way.
-        return True if tune_player != entity_id else announced
+        if tune_player != entity_id:
+            return True
+
+        # When the tune plays on the same device as the music, do not trust
+        # the announce flag as proof of real ducking. Some bridges (VACA's
+        # media-player bridge observed in the wild) accept ANNOUNCE in
+        # supported_features and echo announced=True from play_media, but
+        # don't actually duck-and-resume — play_media just returns as soon
+        # as the call is accepted. Trusting that return value here caused
+        # the immediately-following hourly-track play_media call to stomp
+        # the town tune before it finished (or even started audibly).
+        # Always wait out the tune's known duration in this case.
+        return False
 
     def _should_play_kk(self, cfg: dict, now: datetime) -> bool:
         """Check if K.K. Slider should play based on schedule."""
