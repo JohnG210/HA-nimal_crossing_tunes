@@ -18,6 +18,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Fallback revert target when the paired display has no home_screen
+# attribute of its own (should not normally happen for a real VACA display,
+# but better than leaving the AC clock on screen indefinitely).
+DEFAULT_HOME_SCREEN_PATH = "/view-assist/clock"
+
 # VACA may route to its music page shortly after media_player.play_media
 # returns. Delay navigation so the AC clock is the final display route.
 VACA_MEDIA_ROUTE_DELAY = 1.0
@@ -93,6 +98,69 @@ async def async_show_clock_after_playback(
         return
 
     await _verify_navigation_landed(hass, display_state.attributes, display_entity, path)
+
+
+async def async_revert_clock_on_stop(
+    hass: HomeAssistant, config: dict[str, Any], stopped_entity_id: str | None
+) -> None:
+    """Navigate the paired VACA display off the AC clock when playback stops.
+
+    Mirrors the guard checks in :func:`async_show_clock_after_playback` so the
+    same configuration controls both directions. Only navigates when the
+    satellite is *currently* showing the AC clock path (per its own ground
+    truth sensor) — this avoids clobbering whatever screen the device has
+    since moved to on its own (a camera view, an alarm, etc.).
+    """
+    if not config.get(CONF_SHOW_VACA_CLOCK, False):
+        return
+
+    if stopped_entity_id != config.get(CONF_MEDIA_PLAYER):
+        _LOGGER.debug(
+            "Skipping AC clock revert for non-primary player %s", stopped_entity_id
+        )
+        return
+
+    display_entity = config.get(CONF_VACA_DISPLAY_ENTITY)
+    if not display_entity:
+        return
+
+    display_state = hass.states.get(display_entity)
+    if display_state is None or not _is_view_assist_display(display_state.attributes):
+        return
+
+    if not hass.services.has_service("view_assist", "navigate"):
+        return
+
+    clock_path = config.get(CONF_VACA_CLOCK_PATH) or DEFAULT_VACA_CLOCK_PATH
+    path_entity_id = _current_path_entity_id(display_state.attributes.get("mic_device"))
+    if path_entity_id is not None:
+        current = hass.states.get(path_entity_id)
+        if current is None or current.state != clock_path:
+            _LOGGER.debug(
+                "Skipping AC clock revert: %s reports %s, not the AC clock path",
+                path_entity_id,
+                current.state if current else "unknown",
+            )
+            return
+
+    home_path = display_state.attributes.get("home_screen") or DEFAULT_HOME_SCREEN_PATH
+
+    try:
+        await hass.services.async_call(
+            "view_assist",
+            "navigate",
+            {"device": display_entity, "path": home_path},
+            blocking=True,
+        )
+    except HomeAssistantError:
+        _LOGGER.warning(
+            "Could not revert View Assist display %s off the AC clock",
+            display_entity,
+            exc_info=True,
+        )
+        return
+
+    await _verify_navigation_landed(hass, display_state.attributes, display_entity, home_path)
 
 
 async def _verify_navigation_landed(

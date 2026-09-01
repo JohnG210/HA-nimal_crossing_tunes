@@ -57,7 +57,7 @@ from .const import (
 from .coordinator import TOWN_TUNE_DURATION, ACTunesCoordinator
 from .helpers import get_config as _get_config
 from .music_data import get_available_weathers, map_weather_state
-from .vaca_clock import async_show_clock_after_playback
+from .vaca_clock import async_revert_clock_on_stop, async_show_clock_after_playback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -349,8 +349,10 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_stop(call: ServiceCall) -> None:
         """Handle the stop service call."""
+        cfg = _get_config(hass)
         for entity_id in _target_players(hass, call):
             await player.async_stop(hass, entity_id)
+            await async_revert_clock_on_stop(hass, cfg, entity_id)
 
     hass.services.async_register(
         DOMAIN, SERVICE_PLAY_HOURLY, handle_play_hourly, schema=PLAY_HOURLY_SCHEMA

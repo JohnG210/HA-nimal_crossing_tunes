@@ -63,7 +63,7 @@ from .music_data import (
     map_weather_state,
 )
 from .track_durations import TRACK_DURATIONS
-from .vaca_clock import async_show_clock_after_playback
+from .vaca_clock import async_revert_clock_on_stop, async_show_clock_after_playback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -191,6 +191,9 @@ class ACTunesCoordinator:
 
     async def async_stop(self) -> None:
         """Stop continuous playback and stop the media player."""
+        entity_id = self.config.get(CONF_MEDIA_PLAYER)
+        cfg = self.config
+
         self.enabled = False
         self._intentional_stop = True
         self._current_media_id = None
@@ -201,7 +204,8 @@ class ACTunesCoordinator:
 
         self._teardown()
 
-        await player.async_stop(self.hass, self.config.get(CONF_MEDIA_PLAYER))
+        await player.async_stop(self.hass, entity_id)
+        await async_revert_clock_on_stop(self.hass, cfg, entity_id)
 
         _LOGGER.info("AC Tunes continuous playback stopped")
 
