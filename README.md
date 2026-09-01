@@ -81,7 +81,8 @@ An AC-themed clock card with dynamic sky background, weather icons, and now-play
 To show the clock automatically on a View Assist / VACA satellite whenever this
 integration starts music on its configured speaker:
 
-1. Add a panel view to your **ViewAssist** dashboard:
+1. Add a panel view to your **ViewAssist** dashboard (usually at
+   `Settings → Dashboards → View Assist`, `url_path: view-assist`):
    ```yaml
    views:
      - title: AC Clock
@@ -95,9 +96,15 @@ integration starts music on its configured speaker:
 2. In **Settings → Devices & Services → HA-nimal Crossing Tunes → Configure**:
    - Enable **Show Animal Crossing Clock on View Assist display**.
    - Select the paired View Assist sensor, for example `sensor.desk_echo_show`.
-   - Keep **Animal Crossing Clock view path** at
-     `/dashboard-viewassist/ac-clock`, or enter the full path for your
-     ViewAssist dashboard.
+   - Set **Animal Crossing Clock view path** to match your dashboard's
+     `url_path` plus the view's `path`, e.g. `/view-assist/ac-clock`. This
+     defaults to `/view-assist/ac-clock`, but confirm it against your own
+     dashboard — a mismatched `url_path` here is a silent no-op: the
+     integration will request the navigation and the device state will
+     *appear* to move (the request is echoed back), but nothing renders on
+     screen because the page doesn't exist. As of the navigation-verification
+     fix, a mismatch instead logs a warning naming the requested path and
+     what the satellite actually reports.
 
 The integration intentionally requires this explicit pairing. If View Assist is
 not installed, the selected entity is not a VACA display, the option is off, or

@@ -297,6 +297,12 @@ def _register_services(hass: HomeAssistant) -> None:
                     if tune_player != entity_id:
                         # Playing elsewhere never interrupts the music.
                         announced = True
+                    else:
+                        # Do not trust the announce flag as proof of real
+                        # ducking when playing on the same device as the
+                        # music — see the matching note in coordinator.py's
+                        # _play_town_tune for why.
+                        announced = False
                 except HomeAssistantError:
                     _LOGGER.warning(
                         "Failed to play town tune on %s", tune_player, exc_info=True

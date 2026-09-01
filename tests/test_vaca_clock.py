@@ -17,6 +17,8 @@ from custom_components.ac_tunes.vaca_clock import async_show_clock_after_playbac
 MAIN_PLAYER = "media_player.desk_echo_show_mp_va"
 DISPLAY = "sensor.desk_echo_show"
 PATH = "/dashboard-viewassist/ac-clock"
+SATELLITE_ID = "vaca_123"
+PATH_SENSOR = f"sensor.{SATELLITE_ID}_current_path"
 
 
 class FakeStates:
@@ -25,6 +27,9 @@ class FakeStates:
 
     def get(self, entity_id):
         return self.values.get(entity_id)
+
+    def set(self, entity_id, state):
+        self.values[entity_id] = State(entity_id, state, {})
 
 
 class FakeServices:
@@ -62,11 +67,25 @@ def config(**overrides):
 
 
 def vaca_state():
-    return State(DISPLAY, "", {"display_device": "va-123", "mic_device": "assist_satellite.vaca_123"})
+    return State(
+        DISPLAY,
+        "",
+        {"display_device": "va-123", "mic_device": f"assist_satellite.{SATELLITE_ID}"},
+    )
 
 
-async def run_case(hass, cfg, played=MAIN_PLAYER):
-    await async_show_clock_after_playback(hass, cfg, played)
+async def _instant_sleep(_delay):
+    """Stand-in for asyncio.sleep that never actually waits."""
+
+
+async def run_case(hass, cfg, played=MAIN_PLAYER, *, fast=True):
+    original_sleep = vaca_clock.asyncio.sleep
+    if fast:
+        vaca_clock.asyncio.sleep = _instant_sleep
+    try:
+        await async_show_clock_after_playback(hass, cfg, played)
+    finally:
+        vaca_clock.asyncio.sleep = original_sleep
     return hass.services.calls
 
 
@@ -103,7 +122,7 @@ def test_missing_service_is_noop():
 
 
 def test_valid_pair_navigates_once():
-    hass = FakeHass({DISPLAY: vaca_state()})
+    hass = FakeHass({DISPLAY: vaca_state(), PATH_SENSOR: State(PATH_SENSOR, PATH, {})})
     calls = asyncio.run(run_case(hass, config()))
     assert calls == [("view_assist", "navigate", {"device": DISPLAY, "path": PATH}, True)]
 
@@ -125,14 +144,65 @@ def test_navigation_waits_for_vaca_media_route():
 
         vaca_clock.asyncio.sleep = fake_sleep
         try:
-            hass = FakeHass({DISPLAY: vaca_state()})
+            hass = FakeHass(
+                {DISPLAY: vaca_state(), PATH_SENSOR: State(PATH_SENSOR, PATH, {})}
+            )
             await async_show_clock_after_playback(hass, config(), MAIN_PLAYER)
         finally:
             vaca_clock.asyncio.sleep = original_sleep
-        assert sleeps == [vaca_clock.VACA_MEDIA_ROUTE_DELAY]
+        # First sleep is the pre-navigation VACA route delay; remaining
+        # sleeps (if any) come from the verification poll loop.
+        assert sleeps[0] == vaca_clock.VACA_MEDIA_ROUTE_DELAY
         assert hass.services.calls == [
             ("view_assist", "navigate", {"device": DISPLAY, "path": PATH}, True)
         ]
+
+    asyncio.run(run())
+
+
+def test_verification_passes_when_satellite_confirms_path():
+    async def run():
+        hass = FakeHass(
+            {DISPLAY: vaca_state(), PATH_SENSOR: State(PATH_SENSOR, PATH, {})}
+        )
+        warnings = []
+        original_warning = vaca_clock._LOGGER.warning
+        vaca_clock._LOGGER.warning = lambda *a, **k: warnings.append(a[0] % a[1:] if len(a) > 1 else a[0])
+        try:
+            await run_case(hass, config())
+        finally:
+            vaca_clock._LOGGER.warning = original_warning
+        assert warnings == []
+
+    asyncio.run(run())
+
+
+def test_verification_warns_when_satellite_never_confirms_path():
+    """Regression test for the v0.3.2 bug: a navigate call can be accepted
+
+    and the *requested* path can even echo back onto the display's own
+    sensor, while the satellite's independently-reported path sensor never
+    actually changes (no dashboard view at that path). This must not raise,
+    but it must be observable via a warning instead of silently claiming
+    success.
+    """
+
+    async def run():
+        # PATH_SENSOR intentionally left reporting something else, simulating
+        # a navigation request to a path that doesn't exist on the dashboard.
+        hass = FakeHass(
+            {DISPLAY: vaca_state(), PATH_SENSOR: State(PATH_SENSOR, "/view-assist/clock", {})}
+        )
+        warnings = []
+        original_warning = vaca_clock._LOGGER.warning
+        vaca_clock._LOGGER.warning = lambda *a, **k: warnings.append(a[0] % a[1:] if len(a) > 1 else a[0])
+        try:
+            await run_case(hass, config())
+        finally:
+            vaca_clock._LOGGER.warning = original_warning
+        assert len(warnings) == 1
+        assert PATH in warnings[0]
+        assert PATH_SENSOR in warnings[0]
 
     asyncio.run(run())
 
@@ -145,7 +215,9 @@ for name, fn in [
     ("valid pair navigates exactly once", test_valid_pair_navigates_once),
     ("navigation failure does not break playback", test_navigation_failure_does_not_escape),
     ("navigation waits for VACA media routing", test_navigation_waits_for_vaca_media_route),
+    ("verification passes when satellite confirms path", test_verification_passes_when_satellite_confirms_path),
+    ("verification warns when satellite never confirms path", test_verification_warns_when_satellite_never_confirms_path),
 ]:
     check(name, fn)
 
-print("\n7/7 passed")
+print("\n9/9 passed")

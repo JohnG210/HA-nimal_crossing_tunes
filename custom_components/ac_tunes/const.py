@@ -87,7 +87,7 @@ DEFAULT_KK_VERSION = KK_LIVE
 DEFAULT_SONG_DELAY = 0
 DEFAULT_SHUFFLES_PER_HOUR = 0
 DEFAULT_AUDIO_SOURCE = AUDIO_REMOTE
-DEFAULT_VACA_CLOCK_PATH = "/dashboard-viewassist/ac-clock"
+DEFAULT_VACA_CLOCK_PATH = "/view-assist/ac-clock"
 # Served from config/www/ac_tunes/. Kept relative so that Home Assistant's
 # async_process_play_media_url can sign it and make it absolute.
 DEFAULT_LOCAL_PATH = "/local/ac_tunes"
